@@ -17,7 +17,9 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "dev:server": "nodemon server.js"
+    "dev:server": "nodemon server.js",
+    "gh:push": "git add . && git commit -m \"chore: sync updates\" && git push origin main",
+    "commit-push": "_do_commit_push() { git add . && git commit -m \"$1\" && git push origin main; }; _do_commit_push"
   },
   "type": "module",
   "engines": {
