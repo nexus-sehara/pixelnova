@@ -31,30 +31,56 @@ model Session {
   emailVerified Boolean?  @default(false)
 }
 
+model Shop {
+  id        String   @id @default(cuid())
+  domain    String   @unique // The shop's domain, e.g., example.myshopify.com
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pixelEvents  PixelEvent[]
+  pixelSessions PixelSession[]
+}
+
 model PixelEvent {
   id           String    @id @default(cuid())
   eventType    String
-  sessionToken String    // Corresponds to uniqueToken from eventData
-  shopId       String?
-  shopDomain   String?
   timestamp    DateTime  @default(now())
   userAgent    String?
   eventData    Json      // Store the full event payload
+  
+  // Denormalized for potential direct queries, not part of a relation itself here
+  requestShopDomain String? // The domain as received in the request
+  requestSessionToken String? // The session token as received in the request
 
-  session      PixelSession? @relation(fields: [sessionToken], references: [sessionToken])
+  // Relation to Shop model
+  shopId       String?   // Foreign key
+  shop         Shop?     @relation(fields: [shopId], references: [id])
 
-  @@index([sessionToken])
+  // Relation to PixelSession model
+  pixelSessionId String?      // Foreign key
+  pixelSession   PixelSession? @relation(fields: [pixelSessionId], references: [id])
+
+  @@index([shopId])
+  @@index([pixelSessionId])
+  @@index([requestSessionToken])
 }
 
 model PixelSession {
   id           String   @id @default(cuid())
-  sessionToken String   @unique // This is the uniqueToken
-  shopId       String?
-  shopDomain   String?
+  sessionToken String   @unique // This is the uniqueToken used to identify the session
   userAgent    String?
   firstSeen    DateTime @default(now())
   lastActive   DateTime @updatedAt
-  eventCount   Int      @default(0)
+  // eventCount Int @default(0) // Can be calculated or updated via a transaction if needed
 
-  events       PixelEvent[]
+  // Denormalized for potential direct queries
+  requestShopDomain String?
+
+  // Relation to Shop model
+  shopId       String?  // Foreign key
+  shop         Shop?    @relation(fields: [shopId], references: [id])
+
+  events       PixelEvent[] // One session can have many events
+
+  @@index([shopId])
 }
