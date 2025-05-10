@@ -30,3 +30,31 @@ model Session {
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
 }
+
+model PixelEvent {
+  id           String    @id @default(cuid())
+  eventType    String
+  sessionToken String    // Corresponds to uniqueToken from eventData
+  shopId       String?
+  shopDomain   String?
+  timestamp    DateTime  @default(now())
+  userAgent    String?
+  eventData    Json      // Store the full event payload
+
+  session      PixelSession? @relation(fields: [sessionToken], references: [sessionToken])
+
+  @@index([sessionToken])
+}
+
+model PixelSession {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique // This is the uniqueToken
+  shopId       String?
+  shopDomain   String?
+  userAgent    String?
+  firstSeen    DateTime @default(now())
+  lastActive   DateTime @updatedAt
+  eventCount   Int      @default(0)
+
+  events       PixelEvent[]
+}
