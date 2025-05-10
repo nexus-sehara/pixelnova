@@ -164,8 +164,10 @@ app.get('/api/analytics/sessions', async (req, res) => {
   }
 });
 
+
 // Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => 
-  console.log(`Server running on port ${PORT}`);
-});
+const PORT = process.env.PORT || 3002; // Changed default to 3002
+
+app.listen(PORT, function() { // Using standard function and block
+  console.log('Server running on port ' + PORT);
+});   
