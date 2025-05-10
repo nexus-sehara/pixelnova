@@ -17,7 +17,7 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "start:remix": "remix-serve ./build/server/index.js",
+    "start:remix": "remix-serve ./build/server/index.js --port 3001",
     "start:pixel-server": "node server.js",
     "dev:server": "nodemon server.js",
     "gh:push": "git add . && git commit -m \"chore: sync updates\" && git push origin main",
