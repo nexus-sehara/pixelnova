@@ -166,8 +166,8 @@ app.get('/api/analytics/sessions', async (req, res) => {
 
 
 // Start server
-const PORT = process.env.PORT || 3002; // Changed default to 3002
+const PIXEL_SERVER_INTERNAL_PORT = process.env.PIXEL_SERVER_INTERNAL_PORT || 3002; // Use a distinct internal port
 
-app.listen(PORT, function() { // Using standard function and block
-  console.log('Server running on port ' + PORT);
+app.listen(PIXEL_SERVER_INTERNAL_PORT, function() { // Using standard function and block
+  console.log('Pixel Server running on internal port ' + PIXEL_SERVER_INTERNAL_PORT);
 });   
