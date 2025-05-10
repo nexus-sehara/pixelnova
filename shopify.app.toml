@@ -3,12 +3,12 @@
 client_id = "0ea8d909a69ea8c59c6997446c287172"
 name = "pixelnova"
 handle = "pixelnova"
-application_url = "https://islamic-annually-hiking-threatened.trycloudflare.com"
+application_url = "https://pixelnova.onrender.com"
 embedded = true
 
 [build]
 include_config_on_deploy = true
-automatically_update_urls_on_dev = true
+automatically_update_urls_on_dev = false
 
 [webhooks]
 api_version = "2025-04"
@@ -27,9 +27,9 @@ scopes = "read_customer_events,read_pixels,read_products,write_pixels,write_prod
 
 [auth]
 redirect_urls = [
-  "https://islamic-annually-hiking-threatened.trycloudflare.com/auth/callback",
-  "https://islamic-annually-hiking-threatened.trycloudflare.com/auth/shopify/callback",
-  "https://islamic-annually-hiking-threatened.trycloudflare.com/api/auth/callback"
+  "https://pixelnova.onrender.com/auth/callback",
+  "https://pixelnova.onrender.com/auth/shopify/callback",
+  "https://pixelnova.onrender.com/api/auth/callback"
 ]
 
 [pos]
