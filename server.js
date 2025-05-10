@@ -58,73 +58,87 @@ app.post('/api/pixel-events', cors(corsOptions), async (req, res) => {
     const eventName = metadata?.eventName; // <<<< CORRECTED SOURCE
 
     const shopDomainFromReq = metadata?.shopDomain || context?.document?.location?.hostname || '';
-    const uniqueToken = metadata?.uniqueToken || eventId;
+    const uniqueToken = metadata?.uniqueToken || eventId; // This is the sessionToken for PixelSession
 
     if (!eventName) {
-      // If eventName is still missing, log the whole body for deeper inspection
       console.error('CRITICAL: eventName is missing from req.body.metadata.eventName. Request body:', JSON.stringify(req.body, null, 2));
+      // Return early if eventName is crucial and missing
+      return res.status(400).json({ error: 'eventName is missing' });
     }
-    console.log(`Processing event: ${eventName || 'Unknown Event Name'}, Shop Domain from Req: ${shopDomainFromReq}, Token: ${uniqueToken}`);
+    console.log(`Processing event: ${eventName}, Shop Domain: ${shopDomainFromReq}, Session Token: ${uniqueToken}`);
 
     let shop = null;
     if (shopDomainFromReq) {
-      shop = await prisma.shop.findUnique({
-        where: { domain: shopDomainFromReq },
-      });
+      try {
+        shop = await prisma.shop.findUnique({
+          where: { domain: shopDomainFromReq },
+        });
 
-      if (!shop) {
-        try {
+        if (!shop) {
           shop = await prisma.shop.create({
             data: { domain: shopDomainFromReq }, 
           });
           console.log(`Created new shop: ${shop.domain} with id: ${shop.id}`);
-        } catch (e) {
-          console.error(`Error creating shop with domain ${shopDomainFromReq}:`, e);
-          // If shop creation fails and shop is essential, consider returning an error
         }
+      } catch (e) {
+        console.error(`Error finding or creating shop with domain ${shopDomainFromReq}:`, e);
+        // Decide if you want to proceed without a shop or return an error
       }
     } else {
-      console.warn('shopDomainFromReq is empty or missing. Cannot find or create shop.');
-      // shop remains null. This might be an issue if your PixelEvent requires a shop relation.
+      console.warn('shopDomainFromReq is empty or missing. Cannot associate event with a shop.');
     }
 
-    const pixelEventData = {
-      // --- Direct scalar fields for PixelEvent, as per schema.prisma ---
-      eventType: eventName || 'unknown_event_type', 
-      sessionToken: uniqueToken, // This is required by PixelEvent schema
-      
-      shopId: shop ? shop.id : null, // Direct field on PixelEvent
-      shopDomain: shop ? shop.domain : null, // Direct field on PixelEvent
-
-      timestamp: new Date(eventTimestamp),
-      userAgent: context?.navigator?.userAgent || '',
-      eventData: req.body, 
-
-      // --- Relational connect/create for PixelSession ---
-      // PixelEvent.sessionToken (scalar) is the foreign key for this relation.
-      session: uniqueToken ? { 
-        connectOrCreate: {
-          where: { sessionToken: uniqueToken }, // PixelSession.sessionToken is @unique
-          create: { 
-            sessionToken: uniqueToken, 
-            shopId: shop ? shop.id : null, // For PixelSession record
-            shopDomain: shop ? shop.domain : null, // For PixelSession record
-            userAgent: context?.navigator?.userAgent || '',
-            // eventCount defaults to 0 in schema
+    // Upsert PixelSession
+    let createdOrFoundPixelSession = null;
+    if (uniqueToken) {
+      try {
+        createdOrFoundPixelSession = await prisma.pixelSession.upsert({
+          where: { sessionToken: uniqueToken },
+          update: {
+            lastActive: new Date(),
+            userAgent: context?.navigator?.userAgent || '', // Keep userAgent updated
+            requestShopDomain: shopDomainFromReq, // Keep shop domain updated if it can change
+            shopId: shop?.id, // Ensure shopId is linked/updated
           },
-        },
-      } : undefined,
+          create: {
+            sessionToken: uniqueToken,
+            userAgent: context?.navigator?.userAgent || '',
+            requestShopDomain: shopDomainFromReq,
+            shopId: shop?.id, // Link to Shop
+            firstSeen: new Date(eventTimestamp), // Use event timestamp for firstSeen if available
+          },
+        });
+        console.log(`Upserted PixelSession: ${createdOrFoundPixelSession.id}`);
+      } catch (e) {
+        console.error(`Error upserting PixelSession with token ${uniqueToken}:`, e);
+      }
+    } else {
+      console.warn('uniqueToken is missing. Cannot create or link PixelSession.');
+    }
+
+    // Prepare PixelEvent data
+    const pixelEventToCreate = {
+      eventType: eventName,
+      timestamp: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+      userAgent: context?.navigator?.userAgent || '',
+      eventData: req.body, // Store the full original event payload
+
+      requestShopDomain: shopDomainFromReq,     // Denormalized from request
+      requestSessionToken: uniqueToken,         // Denormalized from request
+      
+      shopId: shop?.id,                         // Foreign Key to Shop
+      pixelSessionId: createdOrFoundPixelSession?.id, // Foreign Key to PixelSession
     };
 
-    console.log('Data for Prisma PixelEvent create:', JSON.stringify(pixelEventData, null, 2));
+    console.log('Data for Prisma PixelEvent create:', JSON.stringify(pixelEventToCreate, null, 2));
 
     try {
-      const storedEvent = await prisma.pixelEvent.create({ data: pixelEventData });
+      const storedEvent = await prisma.pixelEvent.create({ data: pixelEventToCreate });
       console.log('Pixel event stored:', storedEvent.id);
       res.status(200).json({ message: 'Pixel event received and stored successfully', eventId: storedEvent.id });
     } catch (error) {
       console.error('Error storing pixel event with Prisma:', error);
-      console.error('Failed Prisma data for pixelEventData:', JSON.stringify(pixelEventData, null, 2));
+      console.error('Failed Prisma data for PixelEvent:', JSON.stringify(pixelEventToCreate, null, 2));
       res.status(500).json({ error: 'Failed to store pixel event', details: error.message });
     }
   } catch (error) {
