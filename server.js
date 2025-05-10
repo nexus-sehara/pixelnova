@@ -10,8 +10,33 @@ const prisma = new PrismaClient();
 app.use(express.json());
 
 // Enhanced CORS configuration
+const allowedOrigins = [
+  // Add any other specific origins if needed, e.g., for local development
+];
+
 const corsOptions = {
-  origin: 'https://upsellpilot.myshopify.com', // Explicitly allow your Shopify store's origin
+  origin: function (origin, callback) {
+    console.log('CORS check: Request Origin:', origin); // Log the origin
+
+    if (!origin) {
+      // Allow requests with no origin (like mobile apps or curl requests if you want to support them)
+      // For web pixels, an origin is usually present.
+      // If you want to strictly enforce origin for browser-based pixels, you might disallow this.
+      console.log('CORS check: No origin present, allowing for now (consider if this is safe for your app).');
+      return callback(null, true);
+    }
+
+    // Regex to match any *.myshopify.com domain
+    const shopifyDomainPattern = /^https?:\/\/[a-zA-Z0-9-]+\.myshopify\.com$/;
+
+    if (shopifyDomainPattern.test(origin) || allowedOrigins.includes(origin)) {
+      console.log(`CORS check: Origin ${origin} allowed.`);
+      callback(null, true);
+    } else {
+      console.error(`CORS check: Origin ${origin} NOT allowed.`);
+      callback(new Error(`Origin ${origin} not allowed by CORS`)); // Provide a more specific error
+    }
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept'],
   credentials: true,
@@ -28,79 +53,85 @@ app.options('/api/pixel-events', cors(corsOptions));
 // The global cors middleware should cover this, but being explicit here doesn't hurt.
 app.post('/api/pixel-events', cors(corsOptions), async (req, res) => {
   try {
-    const eventData = req.body;
-    
-    // Extract key information for session tracking
-    const {
-      eventName,
-      uniqueToken,
-      shop,
-      metadata
-    } = eventData;
+    // Correctly extract eventName from metadata as per logs
+    const { data: eventDataRaw, metadata, type, context, id: eventId, timestamp: eventTimestamp } = req.body;
+    const eventName = metadata?.eventName; // <<<< CORRECTED SOURCE
 
-    // Store event in database
-    const storedEvent = await prisma.pixelEvent.create({
-      data: {
-        eventType: eventName,
-        sessionToken: uniqueToken, // Shopify's session token
-        shopId: shop?.id,
-        shopDomain: shop?.domain,
-        timestamp: new Date(),
-        userAgent: metadata?.userAgent,
-        // Store the complete event data as JSON
-        eventData: eventData
-      }
-    });
+    const shopDomainFromReq = metadata?.shopDomain || context?.document?.location?.hostname || '';
+    const uniqueToken = metadata?.uniqueToken || eventId;
 
-    // Optional: Update session information
-    await updateOrCreateSession(uniqueToken, eventData);
+    if (!eventName) {
+      // If eventName is still missing, log the whole body for deeper inspection
+      console.error('CRITICAL: eventName is missing from req.body.metadata.eventName. Request body:', JSON.stringify(req.body, null, 2));
+    }
+    console.log(`Processing event: ${eventName || 'Unknown Event Name'}, Shop Domain from Req: ${shopDomainFromReq}, Token: ${uniqueToken}`);
 
-    res.status(200).json({ success: true, eventId: storedEvent.id });
-  } catch (error) {
-    console.error('Error storing pixel event:', error);
-    res.status(500).json({ success: false, error: 'Failed to store event' });
-  }
-});
-
-// Helper function to update or create session information
-async function updateOrCreateSession(sessionToken, eventData) {
-  try {
-    // Check if session exists
-    const existingSession = await prisma.pixelSession.findUnique({
-      where: {
-        sessionToken: sessionToken
-      }
-    });
-
-    if (existingSession) {
-      // Update existing session
-      await prisma.pixelSession.update({
-        where: {
-          sessionToken: sessionToken
-        },
-        data: {
-          lastActive: new Date(),
-          eventCount: existingSession.eventCount + 1
-        }
+    let shop = null;
+    if (shopDomainFromReq) {
+      shop = await prisma.shop.findUnique({
+        where: { domain: shopDomainFromReq },
       });
+
+      if (!shop) {
+        try {
+          shop = await prisma.shop.create({
+            data: { domain: shopDomainFromReq }, 
+          });
+          console.log(`Created new shop: ${shop.domain} with id: ${shop.id}`);
+        } catch (e) {
+          console.error(`Error creating shop with domain ${shopDomainFromReq}:`, e);
+          // If shop creation fails and shop is essential, consider returning an error
+        }
+      }
     } else {
-      // Create new session
-      await prisma.pixelSession.create({
-        data: {
-          sessionToken: sessionToken,
-          shopId: eventData.shop?.id,
-          shopDomain: eventData.shop?.domain,
-          userAgent: eventData.metadata?.userAgent,
-          firstSeen: new Date(),
-          lastActive: new Date(),
-          eventCount: 1
-        }
-      });
+      console.warn('shopDomainFromReq is empty or missing. Cannot find or create shop.');
+      // shop remains null. This might be an issue if your PixelEvent requires a shop relation.
+    }
+
+    const pixelEventData = {
+      // --- Direct scalar fields for PixelEvent, as per schema.prisma ---
+      eventType: eventName || 'unknown_event_type', 
+      sessionToken: uniqueToken, // This is required by PixelEvent schema
+      
+      shopId: shop ? shop.id : null, // Direct field on PixelEvent
+      shopDomain: shop ? shop.domain : null, // Direct field on PixelEvent
+
+      timestamp: new Date(eventTimestamp),
+      userAgent: context?.navigator?.userAgent || '',
+      eventData: req.body, 
+
+      // --- Relational connect/create for PixelSession ---
+      // PixelEvent.sessionToken (scalar) is the foreign key for this relation.
+      session: uniqueToken ? { 
+        connectOrCreate: {
+          where: { sessionToken: uniqueToken }, // PixelSession.sessionToken is @unique
+          create: { 
+            sessionToken: uniqueToken, 
+            shopId: shop ? shop.id : null, // For PixelSession record
+            shopDomain: shop ? shop.domain : null, // For PixelSession record
+            userAgent: context?.navigator?.userAgent || '',
+            // eventCount defaults to 0 in schema
+          },
+        },
+      } : undefined,
+    };
+
+    console.log('Data for Prisma PixelEvent create:', JSON.stringify(pixelEventData, null, 2));
+
+    try {
+      const storedEvent = await prisma.pixelEvent.create({ data: pixelEventData });
+      console.log('Pixel event stored:', storedEvent.id);
+      res.status(200).json({ message: 'Pixel event received and stored successfully', eventId: storedEvent.id });
+    } catch (error) {
+      console.error('Error storing pixel event with Prisma:', error);
+      console.error('Failed Prisma data for pixelEventData:', JSON.stringify(pixelEventData, null, 2));
+      res.status(500).json({ error: 'Failed to store pixel event', details: error.message });
     }
   } catch (error) {
-    console.error('Error updating session:', error);
+    console.error('Outer error handling pixel event:', error);
+    res.status(500).json({ success: false, error: 'Failed to process event' });
   }
-}
+});
 
 // Analytics endpoint - get aggregated data
 app.get('/api/analytics/sessions', async (req, res) => {
