@@ -9,21 +9,23 @@ const prisma = new PrismaClient();
 // Middleware
 app.use(express.json());
 
-// Enhanced CORS configuration for any domain
+// Enhanced CORS configuration
 const corsOptions = {
-  origin: true, // Allow any origin
+  origin: 'https://upsellpilot.myshopify.com', // Explicitly allow your Shopify store's origin
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept'],
   credentials: true,
-  maxAge: 86400 // 24 hours
+  maxAge: 86400, // 24 hours
+  optionsSuccessStatus: 200 // For legacy browser compatibility
 };
 
 app.use(cors(corsOptions));
 
-// Handle preflight OPTIONS requests
+// Handle preflight OPTIONS requests specifically for the pixel events endpoint
 app.options('/api/pixel-events', cors(corsOptions));
 
 // Endpoint to receive web pixel events
+// The global cors middleware should cover this, but being explicit here doesn't hurt.
 app.post('/api/pixel-events', cors(corsOptions), async (req, res) => {
   try {
     const eventData = req.body;
