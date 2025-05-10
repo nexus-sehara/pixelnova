@@ -117,7 +117,7 @@ function sendEventToBackend(eventName: string, eventData: ShopifyEvent, api: any
   };
 
   // Send to your backend endpoint
-  fetch('https://pixelnova.onrender.com/api/pixel-events', { 
+  fetch('https://pixelnova.onrender.com/api/pixel-events', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
