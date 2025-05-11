@@ -54,9 +54,17 @@ export async function getDistinctProductGidsFromEvents(shopId: string, since?: D
       extractedGid = data.cartLine.merchandise.product.id;
     } else if (data.checkout?.lineItems && Array.isArray(data.checkout.lineItems)) {
       // For checkout_started, checkout_completed
+      const PRODUCT_PREFIX = "gid://shopify/Product/";
+      const DRAFT_ORDER_PREFIX = "gid://shopify/DraftOrder/"; // Added to avoid processing draft order items as products
+
       data.checkout.lineItems.forEach((item: any) => {
-        if (item.variant?.product?.id && typeof item.variant.product.id === 'string' && item.variant.product.id.startsWith('gid://shopify/Product/')) {
-          productGids.add(item.variant.product.id);
+        const productId = item.variant?.product?.id;
+        if (productId && typeof productId === 'string') {
+          const numericProductId = productId.replace(PRODUCT_PREFIX, ""); // Remove prefix if it already exists
+          // Ensure it's a numeric ID and not a draft order GID path
+          if (/^\d+$/.test(numericProductId) && !productId.startsWith(DRAFT_ORDER_PREFIX)) {
+            productGids.add(`${PRODUCT_PREFIX}${numericProductId}`);
+          }
         }
       });
     } else if (event.eventType === 'product_viewed' && data.id && typeof data.id === 'string' && data.id.startsWith('gid://shopify/Product/')) {
