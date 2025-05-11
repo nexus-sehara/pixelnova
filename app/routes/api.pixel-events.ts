@@ -9,6 +9,7 @@ console.log(`[${new Date().toISOString()}] MODULE LOADED: app/routes/api.pixel-e
 const getAllowedOrigins = () => {
   const allowed: (string | RegExp)[] = [
     /^https?:\/\/[a-zA-Z0-9-]+\.myshopify\.com$/, // Shopify store domains
+    /^https?:\/\/checkout\.shopify\.com$/, // Shopify checkout domain
     /^https?:\/\/[a-zA-Z0-9-]+-pr-\d+\.onrender\.com$/, // Render preview domains
   ];
   if (process.env.SHOPIFY_APP_URL) {
@@ -34,33 +35,33 @@ const getAllowedOrigins = () => {
 function setCorsHeaders(responseHeaders: Headers, requestOrigin: string | null) {
   const allowedOriginsPatterns = getAllowedOrigins();
   let originAllowed = false;
+  let matchedPattern: string | RegExp | null = null;
 
   if (requestOrigin) {
     for (const pattern of allowedOriginsPatterns) {
       if (typeof pattern === 'string' && pattern === requestOrigin) {
         originAllowed = true;
+        matchedPattern = pattern;
         break;
       }
       if (pattern instanceof RegExp && pattern.test(requestOrigin)) {
         originAllowed = true;
+        matchedPattern = pattern;
         break;
       }
     }
   } else {
-    // This case should ideally not happen for web pixel requests from a browser
-    console.log("CORS: No Origin header present in the request. ACAO not set.");
+    console.log(`[${new Date().toISOString()}] CORS: No Origin header present in the request. ACAO not set.`);
   }
 
   if (originAllowed && requestOrigin) {
     responseHeaders.set("Access-Control-Allow-Origin", requestOrigin);
-    // Explicitly log that the ACAO header is being set
-    console.log(`ACTION CORS: Origin ${requestOrigin} is allowed. Set Access-Control-Allow-Origin to: ${requestOrigin}`);
+    console.log(`[${new Date().toISOString()}] CORS: Origin '${requestOrigin}' IS ALLOWED (matched ${matchedPattern}). Set ACAO to: '${requestOrigin}'`);
     responseHeaders.set("Access-Control-Allow-Credentials", "true");
   } else if (requestOrigin) {
-    // Origin was present but not in the allow list
-    console.warn(`ACTION CORS: Origin ${requestOrigin} is NOT allowed. Access-Control-Allow-Origin was NOT set.`);
+    console.warn(`[${new Date().toISOString()}] CORS: Origin '${requestOrigin}' IS NOT ALLOWED. getAllowedOrigins() list: [${allowedOriginsPatterns.join(", ")}]. ACAO was NOT set.`);
   }
-  // These headers are generally set for CORS responses
+  // These headers are generally set for CORS responses, even if origin is not specifically allowed (browser will then block)
   responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Shopify-Hmac-Sha256");
   responseHeaders.set("Access-Control-Max-Age", "86400"); // 24 hours
@@ -74,33 +75,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
   console.log(`[${timestamp}] LOADER: Detected Origin: ${requestOrigin || "undefined"}`);
 
   const responseHeaders = new Headers();
+  // Use the centralized setCorsHeaders for OPTIONS requests as well
+  setCorsHeaders(responseHeaders, requestOrigin);
 
   if (request.method === "OPTIONS") {
-    // Directly handle CORS headers for OPTIONS preflight
-    if (requestOrigin) {
-      // Basic check: For now, let's assume if Origin is present, allow it for OPTIONS
-      // More robust validation (like checking against getAllowedOrigins) can be added if this works
-      responseHeaders.set("Access-Control-Allow-Origin", requestOrigin);
-      console.log(`[${timestamp}] LOADER (OPTIONS): Set Access-Control-Allow-Origin to: ${requestOrigin}`);
-    } else {
-      console.log(`[${timestamp}] LOADER (OPTIONS): No Origin header detected. Access-Control-Allow-Origin NOT set.`);
-    }
-    responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-    responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Shopify-Hmac-Sha256");
-    responseHeaders.set("Access-Control-Max-Age", "86400"); // 24 hours
-    
-    console.log(`[${timestamp}] LOADER (OPTIONS): Responding with status 204.`);
+    // setCorsHeaders would have already set ACAO if origin is allowed.
+    // If origin was not allowed, ACAO header won't be there, which is correct.
+    console.log(`[${timestamp}] LOADER (OPTIONS): Responding with status 204. ACAO set to: ${responseHeaders.get("Access-Control-Allow-Origin") || "Not set (Origin not allowed or not present)"}`);
     return new Response(null, { status: 204, headers: responseHeaders });
   }
 
   // Fallback for other methods like GET if not explicitly handled by this route
   console.log(`[${timestamp}] LOADER: ${request.method} request to /api/pixel-events, not allowed by loader. Responding 405.`);
-  // Set basic CORS headers even for errors, as the browser might still need them
-  if (requestOrigin) {
-    responseHeaders.set("Access-Control-Allow-Origin", requestOrigin); // Reflect origin if present
-  }
-  responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-  responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Shopify-Hmac-Sha256");
+  // Ensure basic CORS headers are on error responses from loader too.
+  // setCorsHeaders already added general CORS headers. If origin was valid, ACAO would be there.
   return json({ error: "Method Not Allowed by loader" }, { status: 405, headers: responseHeaders });
 }
 

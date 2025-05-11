@@ -34,10 +34,20 @@ export async function getDistinctProductGidsFromEvents(shopId: string, since?: D
     if (!data) return;
 
     let extractedGid: string | undefined | null;
+    let productIdFromVariant: string | undefined | null;
 
-    // Standard events from Shopify's Web Pixel documentation
-    if (data.product?.id && typeof data.product.id === 'string' && data.product.id.startsWith('gid://shopify/Product/')) {
-      // Common for product_viewed, etc. directly having product.id
+    // Path from your example: event.eventData.data.productVariant.product.id
+    if (data.data?.productVariant?.product?.id && typeof data.data.productVariant.product.id === 'string') {
+      const DRAFT_ORDER_PREFIX = "gid://shopify/DraftOrder/";
+      const PRODUCT_PREFIX = "gid://shopify/Product/";
+      const numericProductId = data.data.productVariant.product.id.replace(PRODUCT_PREFIX, "");
+
+      // Ensure it's a numeric ID after stripping potential GID prefix (in case it's sometimes a GID)
+      if (/^\d+$/.test(numericProductId) && !data.data.productVariant.product.id.startsWith(DRAFT_ORDER_PREFIX)) {
+        extractedGid = `${PRODUCT_PREFIX}${numericProductId}`;
+      }
+    } else if (data.product?.id && typeof data.product.id === 'string' && data.product.id.startsWith('gid://shopify/Product/')) {
+      // Common for product_viewed, etc. directly having product.id (Original Check)
       extractedGid = data.product.id;
     } else if (data.cartLine?.merchandise?.product?.id && typeof data.cartLine.merchandise.product.id === 'string' && data.cartLine.merchandise.product.id.startsWith('gid://shopify/Product/')) {
       // Common for product_added_to_cart
