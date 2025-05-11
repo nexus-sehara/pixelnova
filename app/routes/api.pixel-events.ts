@@ -170,8 +170,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
     const userAgent = request.headers.get("User-Agent"); // Get User-Agent from request headers
     const sessionToken = body.id; // This is the event ID, unique per event. Used for PixelSession.sessionToken
-    const eventData = body.data;
-    const clientId = eventData?.clientId; // Stable anonymous ID from the event data
+    const eventData = body.data; // This is the object that should contain checkout, cart lines, etc.
+    const clientId = body.clientId; // Corrected: clientId is at the top level of the event body
 
     // Extract new identifiers from eventData
     const checkoutToken = eventData?.checkout?.token;
