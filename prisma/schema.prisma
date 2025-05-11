@@ -91,4 +91,5 @@ model PixelSession {
   @@index([customerEmail])
   @@index([shopifyCustomerId])
   @@index([shopifyOrderId])
+  @@unique([shopId, clientId], name: "shopId_clientId_unique")
 }

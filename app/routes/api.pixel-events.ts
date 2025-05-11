@@ -186,64 +186,46 @@ export async function action({ request }: ActionFunctionArgs) {
 
     let pixelSession;
 
-    if (clientId) { // Primary path: session identified by clientId
-      pixelSession = await prisma.pixelSession.findFirst({
-        where: {
-          shopId: shop.id,
-          clientId: clientId,
-        },
-      });
+    if (clientId && shop.id) { // Ensure clientId and shop.id are present for upsert
+      const createData = {
+        shopId: shop.id,
+        sessionToken: sessionToken, // ID of the event that initiated this clientId session
+        clientId: clientId,
+        userAgent: userAgent ?? undefined,
+        requestShopDomain: shopDomainFromReq,
+        checkoutToken: checkoutToken ?? undefined,
+        customerEmail: customerEmail ?? undefined,
+        shopifyCustomerId: shopifyCustomerId ?? undefined,
+        shopifyOrderId: shopifyOrderId ?? undefined,
+      };
 
-      if (pixelSession) {
-        // Update existing session
-        const updateData: Prisma.PixelSessionUpdateInput = {};
-        if (userAgent && pixelSession.userAgent !== userAgent) {
-          updateData.userAgent = userAgent;
-        }
-        if (checkoutToken && pixelSession.checkoutToken !== checkoutToken) {
-          updateData.checkoutToken = checkoutToken;
-        }
-        if (customerEmail && pixelSession.customerEmail !== customerEmail) {
-          updateData.customerEmail = customerEmail;
-        }
-        if (shopifyCustomerId && pixelSession.shopifyCustomerId !== shopifyCustomerId) {
-          updateData.shopifyCustomerId = shopifyCustomerId;
-        }
-        if (shopifyOrderId && pixelSession.shopifyOrderId !== shopifyOrderId) {
-          updateData.shopifyOrderId = shopifyOrderId;
-        }
-        // The sessionToken field in PixelSession stores the ID of the first event that created this clientId-based session.
-        // It's not updated here to preserve that original event ID. lastActive is handled by @updatedAt.
+      const updateData = {
+        userAgent: userAgent ?? undefined,
+        requestShopDomain: shopDomainFromReq, // Potentially update if it changes
+        // lastActive is handled by @updatedAt
+        // Conditionally add fields to updateData only if they have new values
+        // This prevents overwriting existing values with null/undefined if not present in the current event
+        ...(checkoutToken && { checkoutToken }),
+        ...(customerEmail && { customerEmail }),
+        ...(shopifyCustomerId && { shopifyCustomerId }),
+        ...(shopifyOrderId && { shopifyOrderId }),
+      };
+      
+      // Remove undefined properties from updateData to avoid Prisma errors or accidental nulling of fields
+      Object.keys(updateData).forEach(key => updateData[key as keyof typeof updateData] === undefined && delete updateData[key as keyof typeof updateData]);
 
-        if (Object.keys(updateData).length > 0) {
-          pixelSession = await prisma.pixelSession.update({
-            where: { id: pixelSession.id },
-            data: updateData,
-          });
-          console.log(`[${timestamp}] ACTION: Updated PixelSession (clientId: ${clientId}): ${pixelSession.id} with data:`, JSON.stringify(updateData));
-        } else {
-          console.log(`[${timestamp}] ACTION: PixelSession (clientId: ${clientId}): ${pixelSession.id} found, no new data to update.`);
-        }
-      } else {
-        // Create new session with clientId
-        pixelSession = await prisma.pixelSession.create({
-          data: {
+      pixelSession = await prisma.pixelSession.upsert({
+        where: { 
+          shopId_clientId_unique: { // Use the name of the unique constraint
             shopId: shop.id,
-            sessionToken: sessionToken, // ID of the event that initiated this clientId session
             clientId: clientId,
-            userAgent: userAgent ?? undefined,
-            requestShopDomain: shopDomainFromReq,
-            ...(checkoutToken && { checkoutToken }),
-            ...(customerEmail && { customerEmail }),
-            ...(shopifyCustomerId && { shopifyCustomerId }),
-            ...(shopifyOrderId && { shopifyOrderId }),
-          },
-        });
-        console.log(`[${timestamp}] ACTION: Created new PixelSession (clientId: ${clientId}): ${pixelSession.id}`);
-      }
-    } else {
-      // Fallback: no clientId. Create a PixelSession per event, using eventId as sessionToken.
-      // These sessions are isolated.
+          }
+        },
+        create: createData,
+        update: updateData,
+      });
+      console.log(`[${timestamp}] ACTION: Upserted PixelSession (clientId: ${clientId}): ${pixelSession.id}. EventName: ${eventName}. Contained shopifyOrderId: ${shopifyOrderId || 'N/A'}, shopifyCustomerId: ${shopifyCustomerId || 'N/A'}`);
+    } else if (sessionToken) { // Fallback: no clientId or shopId for upsert. Create a PixelSession per event.
       pixelSession = await prisma.pixelSession.create({
         data: {
           shopId: shop.id,
@@ -273,6 +255,15 @@ export async function action({ request }: ActionFunctionArgs) {
       },
     });
     console.log(`[${timestamp}] ACTION: Pixel event stored: ${newEvent.id}, linked to PixelSession: ${pixelSession.id}`);
+    
+    // Re-affirm ACAO header for the actual POST response
+    if (requestOrigin && responseHeaders.has("Access-Control-Allow-Origin")) {
+        // This check ensures we only re-affirm if it was allowed and set by setCorsHeaders initially
+        // If setCorsHeaders decided not to set it (e.g. origin not allowed), we don't add it here.
+        // The value should be the one set by setCorsHeaders.
+        console.log(`[${timestamp}] ACTION: Re-affirming Access-Control-Allow-Origin for POST response to: ${responseHeaders.get("Access-Control-Allow-Origin")}`);
+    }
+
     return json({ message: 'Pixel event received and stored successfully', eventId: newEvent.id, pixelSessionId: pixelSession.id }, { status: 200, headers: responseHeaders });
 
   } catch (error: any) {
