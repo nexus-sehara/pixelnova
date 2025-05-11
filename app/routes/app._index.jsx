@@ -14,6 +14,9 @@ import {
 } from "@shopify/polaris";
 import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { json } from "@remix-run/node";
+import prisma from "../db.server";
+import { syncAllProductMetadata } from "../lib/product-metadata.server.ts";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
@@ -22,76 +25,106 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
+  const { admin, session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const actionType = formData.get("_action");
+
+  if (actionType === "syncProducts") {
+    try {
+      const shop = await prisma.shop.findUnique({
+        where: { domain: session.shop },
+        select: { id: true }
+      });
+
+      if (!shop) {
+        console.error(`[Sync Action] Shop not found in DB: ${session.shop}`);
+        return json({ syncStatus: "error", message: "Shop not found in database." }, { status: 404 });
+      }
+
+      console.log(`[Sync Action] Starting product metadata sync for shop: ${session.shop} (ID: ${shop.id})`);
+      await syncAllProductMetadata(admin, shop.id, session.shop);
+      console.log(`[Sync Action] Completed product metadata sync for shop: ${session.shop}`);
+      return json({ syncStatus: "completed", shop: session.shop });
+    } catch (error) {
+      console.error(`[Sync Action] Error during product metadata sync for shop ${session.shop}:`, error);
+      return json({ syncStatus: "error", message: error.message || "Unknown error during sync." }, { status: 500 });
+    }
+  } else {
+    const color = ["Red", "Orange", "Yellow", "Green"][
+      Math.floor(Math.random() * 4)
+    ];
+    const response = await admin.graphql(
+      `#graphql
+        mutation populateProduct($product: ProductCreateInput!) {
+          productCreate(product: $product) {
+            product {
+              id
+              title
+              handle
+              status
+              variants(first: 10) {
+                edges {
+                  node {
+                    id
+                    price
+                    barcode
+                    createdAt
+                  }
                 }
               }
             }
           }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
+        }`,
+      {
+        variables: {
+          product: {
+            title: `${color} Snowboard`,
+          },
         },
       },
-    },
-  );
-  const responseJson = await response.json();
-  const product = responseJson.data.productCreate.product;
-  const variantId = product.variants.edges[0].node.id;
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyRemixTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
+    );
+    const responseJson = await response.json();
+    const product = responseJson.data.productCreate.product;
+    const variantId = product.variants.edges[0].node.id;
+    const variantResponse = await admin.graphql(
+      `#graphql
+      mutation shopifyRemixTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants {
+            id
+            price
+            barcode
+            createdAt
+          }
         }
-      }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
+      }`,
+      {
+        variables: {
+          productId: product.id,
+          variants: [{ id: variantId, price: "100.00" }],
+        },
       },
-    },
-  );
-  const variantResponseJson = await variantResponse.json();
+    );
+    const variantResponseJson = await variantResponse.json();
 
-  return {
-    product: responseJson.data.productCreate.product,
-    variant: variantResponseJson.data.productVariantsBulkUpdate.productVariants,
-  };
+    return {
+      product: responseJson.data.productCreate.product,
+      variant: variantResponseJson.data.productVariantsBulkUpdate.productVariants,
+    };
+  }
 };
 
 export default function Index() {
   const fetcher = useFetcher();
   const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+  const isLoadingProductGeneration =
+    fetcher.state === "submitting" &&
+    fetcher.submission?.formData.get("_action") !== "syncProducts";
+  
+  const isSyncingProducts =
+    fetcher.state === "submitting" &&
+    fetcher.submission?.formData.get("_action") === "syncProducts";
+
   const productId = fetcher.data?.product?.id.replace(
     "gid://shopify/Product/",
     "",
@@ -103,6 +136,10 @@ export default function Index() {
   const [pixelError, setPixelError] = useState("");
   const [pixelSuccess, setPixelSuccess] = useState("");
   // --- End Web Pixel Activation State ---
+
+  // --- Product Sync State ---
+  const [syncStatusMessage, setSyncStatusMessage] = useState("");
+  // --- End Product Sync State ---
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -129,6 +166,18 @@ export default function Index() {
     }
   }, []); // Empty dependency array ensures this runs once on mount
 
+  useEffect(() => {
+    if (fetcher.data?.syncStatus) {
+      if (fetcher.data.syncStatus === "completed") {
+        shopify.toast.show(`Product metadata sync completed for ${fetcher.data.shop}.`);
+        setSyncStatusMessage("Sync completed successfully.");
+      } else if (fetcher.data.syncStatus === "error") {
+        shopify.toast.show(`Product metadata sync failed: ${fetcher.data.message}`, { isError: true });
+        setSyncStatusMessage(`Sync failed: ${fetcher.data.message}`);
+      }
+    }
+  }, [fetcher.data, shopify]);
+
   const checkPixelStatus = async () => {
     try {
       const res = await fetch("/api/activate-webpixel", { 
@@ -154,6 +203,11 @@ export default function Index() {
   };
 
   const generateProduct = () => fetcher.submit({}, { method: "POST" });
+
+  const handleSyncProducts = () => {
+    setSyncStatusMessage("Initiating product sync...");
+    fetcher.submit({ _action: "syncProducts" }, { method: "POST" });
+  };
 
   // --- Web Pixel Activation Handler ---
   const activateWebPixel = async () => {
@@ -249,7 +303,7 @@ export default function Index() {
                   </Text>
                 </BlockStack>
                 <InlineStack gap="300">
-                  <Button loading={isLoading} onClick={generateProduct}>
+                  <Button loading={isLoadingProductGeneration} onClick={generateProduct}>
                     Generate a product
                   </Button>
                   {fetcher.data?.product && (
@@ -269,12 +323,29 @@ export default function Index() {
                   >
                     {pixelStatus === "ACTIVE" ? "Pixel Active" : "Activate Web Pixel"}
                   </Button>
+                  <Button
+                    onClick={handleSyncProducts}
+                    loading={isSyncingProducts}
+                    disabled={isSyncingProducts}
+                  >
+                    Sync Product Data
+                  </Button>
                 </InlineStack>
                 {pixelError && (
                   <Box color="critical" padding="200">{pixelError}</Box>
                 )}
                 {pixelSuccess && (
                   <Box color="success" padding="200">{pixelSuccess}</Box>
+                )}
+                {syncStatusMessage && (
+                  <Box padding="200"
+                       background={fetcher.data?.syncStatus === "error" ? "bg-surface-critical" : "bg-surface-success"}
+                       borderColor={fetcher.data?.syncStatus === "error" ? "border-critical" : "border-success"}
+                       borderWidth="025" borderRadius="200">
+                    <Text as="p" variant="bodyMd" tone={fetcher.data?.syncStatus === "error" ? "critical" : "success"}>
+                      {syncStatusMessage}
+                    </Text>
+                  </Box>
                 )}
                 {fetcher.data?.product && (
                   <>
@@ -407,7 +478,7 @@ export default function Index() {
                       to get started
                     </List.Item>
                     <List.Item>
-                      Explore Shopify’s API with{" "}
+                      Explore Shopify's API with{" "}
                       <Link
                         url="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
                         target="_blank"

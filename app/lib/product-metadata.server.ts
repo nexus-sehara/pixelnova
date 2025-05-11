@@ -1,4 +1,4 @@
-import { PrismaClient, Prisma, ProductMetadataCreateInput, ProductMetadataUpdateInput } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { ShopifyApp } from '@shopify/shopify-app-remix/server'; // Assuming this is how you get Shopify context
 // Or import admin from "../shopify.server"; // if you have a specific shopify.server.ts for admin context
 
@@ -8,19 +8,73 @@ const prisma = new PrismaClient();
  * Extracts distinct Shopify Product GIDs from PixelEvent.eventData.
  * This function will need to iterate through different event types and their specific JSON structures.
  */
-export async function getDistinctProductGidsFromEvents(since?: Date): Promise<string[]> {
-  console.log(`[ProductMetadata] Fetching distinct product GIDs from PixelEvents${since ? ' since ' + since.toISOString() : ''}`);
-  // TODO: Implement logic to query PixelEvent table
-  // - Filter events (e.g., product_viewed, product_added_to_cart, checkout_completed)
-  // - Parse eventData JSON to extract product GIDs (e.g., data.product.id, data.cartLine.merchandise.product.id, etc.)
-  // - Ensure they are valid GIDs (e.g., starts with "gid://shopify/Product/")
-  // - Return a unique list of GIDs
-  // Example: 
-  // const events = await prisma.pixelEvent.findMany({ where: { /* conditions */ }, select: { eventData: true } });
-  // const productGids = new Set<string>();
-  // events.forEach(event => { /* parsing logic */ });
-  // return Array.from(productGids);
-  return []; // Placeholder
+export async function getDistinctProductGidsFromEvents(shopId: string, since?: Date): Promise<string[]> {
+  console.log(`[ProductMetadata] Fetching distinct product GIDs from PixelEvents for shopId: ${shopId}${since ? ' since ' + since.toISOString() : ''}`);
+  
+  const whereConditions: Prisma.PixelEventWhereInput = {
+    shopId: shopId,
+    // Potentially add a filter for eventType if we only care about specific ones
+    // eventType: { in: ['product_viewed', 'product_added_to_cart'] } 
+  };
+
+  if (since) {
+    whereConditions.timestamp = { gte: since };
+  }
+
+  const events = await prisma.pixelEvent.findMany({
+    where: whereConditions,
+    select: { eventData: true, eventType: true }, // Select eventType to guide parsing
+  });
+
+  const productGids = new Set<string>();
+
+  events.forEach(event => {
+    const data = event.eventData as any; // Using any for flexibility, consider defining types for eventData structures
+
+    if (!data) return;
+
+    let extractedGid: string | undefined | null;
+
+    // Standard events from Shopify's Web Pixel documentation
+    if (data.product?.id && typeof data.product.id === 'string' && data.product.id.startsWith('gid://shopify/Product/')) {
+      // Common for product_viewed, etc. directly having product.id
+      extractedGid = data.product.id;
+    } else if (data.cartLine?.merchandise?.product?.id && typeof data.cartLine.merchandise.product.id === 'string' && data.cartLine.merchandise.product.id.startsWith('gid://shopify/Product/')) {
+      // Common for product_added_to_cart
+      extractedGid = data.cartLine.merchandise.product.id;
+    } else if (data.checkout?.lineItems && Array.isArray(data.checkout.lineItems)) {
+      // For checkout_started, checkout_completed
+      data.checkout.lineItems.forEach((item: any) => {
+        if (item.variant?.product?.id && typeof item.variant.product.id === 'string' && item.variant.product.id.startsWith('gid://shopify/Product/')) {
+          productGids.add(item.variant.product.id);
+        }
+      });
+    } else if (event.eventType === 'product_viewed' && data.id && typeof data.id === 'string' && data.id.startsWith('gid://shopify/Product/')) {
+      // Some product_viewed events might have the GID directly at data.id (less common, but covering bases)
+      // This path is speculative and depends on actual event payloads seen
+      extractedGid = data.id;
+    }
+    // Potentially more complex parsing for other event types like 'collection_viewed'
+    // For 'collection_viewed', data.collection.products.edges[].node.id might be the path for products within that collection context
+    // or data.collection.productVariants for variants.
+    
+    // Example for a hypothetical collection_viewed structure if it contained product GIDs directly:
+    // else if (event.eventType === 'collection_viewed' && data.collection?.products?.edges) {
+    //   data.collection.products.edges.forEach((edge: any) => {
+    //     if (edge.node?.id && typeof edge.node.id === 'string' && edge.node.id.startsWith('gid://shopify/Product/')) {
+    //       productGids.add(edge.node.id);
+    //     }
+    //   });
+    // }
+
+
+    if (extractedGid) {
+      productGids.add(extractedGid);
+    }
+  });
+
+  console.log(`[ProductMetadata] Found ${productGids.size} distinct product GIDs for shopId: ${shopId}`);
+  return Array.from(productGids);
 }
 
 /**
@@ -112,7 +166,7 @@ export async function upsertProductMetadata(
     return;
   }
 
-  const createData: ProductMetadataCreateInput = {
+  const createData: Prisma.ProductMetadataCreateInput = {
     shopifyProductId: productGid,
     shop: { connect: { id: shopId } },
     title: shopifyProductData.title || 'N/A',
@@ -135,7 +189,7 @@ export async function upsertProductMetadata(
   // For the update, we want to update all fields if the product is re-fetched
   // Prisma's upsert needs separate create and update objects.
   // The update object should not try to update the relation or shopifyProductId if it's part of the where clause.
-  const updateData: ProductMetadataUpdateInput = {
+  const updateData: Prisma.ProductMetadataUpdateInput = {
     title: shopifyProductData.title || 'N/A',
     handle: shopifyProductData.handle,
     productType: shopifyProductData.productType,
@@ -175,7 +229,7 @@ export async function syncAllProductMetadata(admin: any, shopId: string, shopDom
   
   // 1. Get distinct product GIDs from PixelEvents that are not yet in ProductMetadata or haven't been fetched recently.
   // This needs more sophisticated logic: find GIDs in PixelEvents, then check against ProductMetadata.
-  const productGidsToFetch = await getDistinctProductGidsFromEvents(); // Simplified for now
+  const productGidsToFetch = await getDistinctProductGidsFromEvents(shopId); // Pass shopId
 
   const existingMetadata = await prisma.productMetadata.findMany({
     where: { shopId: shopId, shopifyProductId: { in: productGidsToFetch } },
