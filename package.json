@@ -9,7 +9,7 @@
     "deploy": "shopify app deploy",
     "config:use": "shopify app config use",
     "env": "shopify app env",
-    "start": "npm:start:remix",
+    "start": "npm run start:remix",
     "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate --no-engine && sh -c 'DATABASE_URL=\"$MIGRATE_DATABASE_URL\" npx prisma migrate resolve --applied 20250510161352_init_postgresql_for_accelerate ; DATABASE_URL=\"$MIGRATE_DATABASE_URL\" npx prisma migrate deploy'",
     "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
