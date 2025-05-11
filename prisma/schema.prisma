@@ -71,6 +71,7 @@ model PixelSession {
   shopId             String?   // Changed from Int? to String? to match Shop.id
   sessionToken       String    @unique // This was from body.id or body.metadata.uniqueToken
   clientId           String?   // Will store body.clientId
+  userAgent          String?   // Add this field back
   requestShopDomain  String?
   firstSeen          DateTime  @default(now())
   lastActive         DateTime @updatedAt
