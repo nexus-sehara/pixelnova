@@ -166,11 +166,14 @@ export async function action({ request }: ActionFunctionArgs) {
     if (uniqueToken) {
       try {
         const userAgent = context?.navigator?.userAgent || '';
+        const eventClientId = body.clientId; // Extract clientId from the event body
+
         const sessionData = {
           lastActive: new Date(),
           userAgent: userAgent,
           requestShopDomain: shopDomainFromReq,
           shopId: shop?.id,
+          clientId: eventClientId, // Include clientId in the data for upsert
         };
         createdOrFoundPixelSession = await prisma.pixelSession.upsert({
           where: { sessionToken: uniqueToken },
@@ -180,6 +183,7 @@ export async function action({ request }: ActionFunctionArgs) {
             userAgent: userAgent,
             requestShopDomain: shopDomainFromReq,
             shopId: shop?.id,
+            clientId: eventClientId, // Include clientId when creating a new session
             firstSeen: eventTimestamp ? new Date(eventTimestamp) : new Date(),
           },
         });

@@ -66,21 +66,17 @@ model PixelEvent {
 }
 
 model PixelSession {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique // This is the uniqueToken used to identify the session
-  userAgent    String?
-  firstSeen    DateTime @default(now())
-  lastActive   DateTime @updatedAt
-  // eventCount Int @default(0) // Can be calculated or updated via a transaction if needed
+  id                 String    @id @default(cuid())
+  shop               Shop?     @relation(fields: [shopId], references: [id])
+  shopId             String?   // Changed from Int? to String? to match Shop.id
+  sessionToken       String    @unique // This was from body.id or body.metadata.uniqueToken
+  clientId           String?   // Will store body.clientId
+  requestShopDomain  String?
+  firstSeen          DateTime  @default(now())
+  lastActive         DateTime @updatedAt
+  // eventCount         Int @default(0) // Can be calculated or updated via a transaction if needed
 
-  // Denormalized for potential direct queries
-  requestShopDomain String?
-
-  // Relation to Shop model
-  shopId       String?  // Foreign key
-  shop         Shop?    @relation(fields: [shopId], references: [id])
-
-  events       PixelEvent[] // One session can have many events
+  events             PixelEvent[] // One session can have many events
 
   @@index([shopId])
 }
