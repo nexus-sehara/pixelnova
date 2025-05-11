@@ -39,6 +39,7 @@ model Shop {
 
   pixelEvents  PixelEvent[]
   pixelSessions PixelSession[]
+  productMetadata ProductMetadata[]
 }
 
 model PixelEvent {
@@ -92,4 +93,40 @@ model PixelSession {
   @@index([shopifyCustomerId])
   @@index([shopifyOrderId])
   @@unique([shopId, clientId], name: "shopId_clientId_unique")
+}
+
+model ProductMetadata {
+  id                 String    @id @default(cuid())
+  shopifyProductId   String    @unique // e.g., gid://shopify/Product/12345
+  shopId             String
+  shop               Shop      @relation(fields: [shopId], references: [id])
+
+  title              String
+  handle             String?
+  productType        String?
+  vendor             String?
+  tags               String[]  @default([])
+  status             String?   // e.g., ACTIVE, ARCHIVED, DRAFT
+
+  minVariantPrice    Float?    // Minimum price of its variants
+  maxVariantPrice    Float?    // Maximum price of its variants
+  currencyCode       String?   // Currency code for the prices
+
+  featuredImageUrl   String?
+  
+  // For MVP, storing some denormalized variant and collection data as JSON.
+  // Can be normalized to separate tables in a later phase if complex querying is needed.
+  variantsData       Json?     // Array of basic variant info: [{ id, title, price, sku, inventoryQuantity, inventoryPolicy, imageUrl }]
+  collectionsData    Json?     // Array of collection info: [{ id, title, handle }]
+
+  shopifyCreatedAt   DateTime? // Product creation date in Shopify
+  shopifyUpdatedAt   DateTime? // Product last update date in Shopify
+
+  lastFetchedAt      DateTime  @default(now()) // When NovaPixel last fetched/updated this data
+  pixelNovaUpdatedAt DateTime  @updatedAt      // When this record was updated in NovaPixel DB
+
+  @@index([shopId])
+  @@index([shopId, productType])
+  @@index([shopId, vendor])
+  @@index([shopId, status])
 }
