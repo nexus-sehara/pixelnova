@@ -44,23 +44,20 @@ function setCorsHeaders(responseHeaders: Headers, requestOrigin: string | null) 
       }
     }
   } else {
-    // If no origin header is present, we might allow (e.g. for server-to-server or if not strictly required)
-    // However, for web pixel (browser context) an Origin header is expected.
-    // For now, let's be strict: if origin is expected for CORS, it must be present and match.
-    // If you want to allow requests with no origin, this logic would need adjustment.
-    console.log("CORS: No Origin header present in the request.");
-    // originAllowed = true; // Example: uncomment to allow requests with no Origin header
+    // This case should ideally not happen for web pixel requests from a browser
+    console.log("CORS: No Origin header present in the request. ACAO not set.");
   }
 
   if (originAllowed && requestOrigin) {
     responseHeaders.set("Access-Control-Allow-Origin", requestOrigin);
+    // Explicitly log that the ACAO header is being set
+    console.log(`CORS: Origin ${requestOrigin} is allowed. Set Access-Control-Allow-Origin to: ${requestOrigin}`);
     responseHeaders.set("Access-Control-Allow-Credentials", "true");
   } else if (requestOrigin) {
-    // If origin was present but not allowed, don't set Allow-Origin
-    // The browser will block it, which is the correct behavior.
-    console.warn(`CORS: Origin ${requestOrigin} is not allowed.`);
+    // Origin was present but not in the allow list
+    console.warn(`CORS: Origin ${requestOrigin} is NOT allowed. Access-Control-Allow-Origin was NOT set.`);
   }
-  // These headers are often set even if origin isn't matched, or for preflight.
+  // These headers are generally set for CORS responses
   responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Shopify-Hmac-Sha256");
   responseHeaders.set("Access-Control-Max-Age", "86400"); // 24 hours
@@ -69,61 +66,49 @@ function setCorsHeaders(responseHeaders: Headers, requestOrigin: string | null) 
 export async function loader({ request }: LoaderFunctionArgs) {
   console.log("--- Loader: All Request Headers ---");
   request.headers.forEach((value, key) => {
-    console.log(`Header: ${key}: ${value}`);
+    console.log(`Loader Header: ${key}: ${value}`);
   });
   console.log("-----------------------------------");
 
   const requestOrigin = request.headers.get("Origin");
   const responseHeaders = new Headers();
-  setCorsHeaders(responseHeaders, requestOrigin);
+  setCorsHeaders(responseHeaders, requestOrigin); //This will set ACAO if origin is valid
 
   if (request.method === "OPTIONS") {
-    console.log("Remix API route: Handling OPTIONS request in loader for /api/pixel-events. Origin:", requestOrigin);
-    // Check if origin was allowed by setCorsHeaders implicitly
-    // If Access-Control-Allow-Origin is set, it means origin was matched and allowed
-    if (requestOrigin && responseHeaders.has("Access-Control-Allow-Origin")) {
-      return new Response(null, { status: 204, headers: responseHeaders });
-    } else if (!requestOrigin) {
-        // Allow OPTIONS if no origin for cases like simple health checks or if policy is relaxed
-        // However, for a browser's preflight, origin should be present.
-        // This case might need review based on actual scenarios.
-        console.log("Remix API route: OPTIONS request with no Origin header. Responding 204.");
-        return new Response(null, { status: 204, headers: responseHeaders }); // Still send general CORS headers
-    } else {
-      console.warn(`Remix API route: OPTIONS request from disallowed origin ${requestOrigin}. Responding 403.`);
-      // It's better to return 204 for OPTIONS even if origin is denied, as per some interpretations.
-      // The actual POST will be blocked. Or return 403. For now, let's send 204.
-      return new Response(null, { status: 204, headers: responseHeaders });
-      // Alternative for strict denial:
-      // return new Response("CORS: Origin not allowed for OPTIONS", { status: 403, headers: responseHeaders });
-    }
+    const originForLog = requestOrigin || "undefined";
+    const acaoValue = responseHeaders.get("Access-Control-Allow-Origin") || "Not Set";
+    console.log(`Remix API route: Handling OPTIONS request. Detected Origin: ${originForLog}. Responding with ACAO: ${acaoValue}`);
+    return new Response(null, { status: 204, headers: responseHeaders });
   }
 
-  console.log(`Remix API route: ${request.method} request to /api/pixel-events, method not allowed by loader.`);
+  // Fallback for other methods like GET if not explicitly handled
+  console.log(`Remix API route: ${request.method} request to /api/pixel-events, not allowed by loader.`);
   return json({ error: "Method Not Allowed by loader" }, { status: 405, headers: responseHeaders });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   console.log("--- Action: All Request Headers ---");
   request.headers.forEach((value, key) => {
-    console.log(`Header: ${key}: ${value}`);
+    console.log(`Action Header: ${key}: ${value}`);
   });
   console.log("-----------------------------------");
 
   const requestOrigin = request.headers.get("Origin");
   const responseHeaders = new Headers();
-  setCorsHeaders(responseHeaders, requestOrigin);
+  setCorsHeaders(responseHeaders, requestOrigin); //This will set ACAO if origin is valid
 
-  // If origin was required, present, but not allowed, Access-Control-Allow-Origin won't be set.
-  // The browser will block this client-side. For server-side, we can reject early.
+  // Early exit if CORS pre-check failed (e.g. origin was present but not allowed)
+  // This relies on setCorsHeaders NOT setting ACAO if origin is disallowed.
   if (requestOrigin && !responseHeaders.has("Access-Control-Allow-Origin")) {
-    console.error(`CORS error in action: Origin ${requestOrigin} not allowed.`);
+    console.error(`CORS error in action: Origin ${requestOrigin} was present but not allowed by CORS policy.`);
     return json({ error: "CORS error", details: `Origin ${requestOrigin} not allowed` }, { status: 403, headers: responseHeaders });
   }
   
+  // Though OPTIONS should be handled by loader, catch it here defensively.
   if (request.method === "OPTIONS") {
-    console.log("Remix API route: Handling OPTIONS request in action (should have been caught by loader). Origin:", requestOrigin);
-    // This should ideally be handled by the loader.
+    const originForLog = requestOrigin || "undefined";
+    const acaoValue = responseHeaders.get("Access-Control-Allow-Origin") || "Not Set";
+    console.log(`Remix API route: Handling OPTIONS in action (fallback). Detected Origin: ${originForLog}. Responding with ACAO: ${acaoValue}`);
     return new Response(null, { status: 204, headers: responseHeaders });
   }
 
