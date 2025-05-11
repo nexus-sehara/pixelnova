@@ -2,6 +2,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import prisma from "../db.server"; // Corrected path to Prisma client
 
+console.log(`[${new Date().toISOString()}] MODULE LOADED: app/routes/api.pixel-events.ts`);
+
 // Allowed origins logic
 const getAllowedOrigins = () => {
   const allowed: (string | RegExp)[] = [
@@ -51,11 +53,11 @@ function setCorsHeaders(responseHeaders: Headers, requestOrigin: string | null) 
   if (originAllowed && requestOrigin) {
     responseHeaders.set("Access-Control-Allow-Origin", requestOrigin);
     // Explicitly log that the ACAO header is being set
-    console.log(`CORS: Origin ${requestOrigin} is allowed. Set Access-Control-Allow-Origin to: ${requestOrigin}`);
+    console.log(`ACTION CORS: Origin ${requestOrigin} is allowed. Set Access-Control-Allow-Origin to: ${requestOrigin}`);
     responseHeaders.set("Access-Control-Allow-Credentials", "true");
   } else if (requestOrigin) {
     // Origin was present but not in the allow list
-    console.warn(`CORS: Origin ${requestOrigin} is NOT allowed. Access-Control-Allow-Origin was NOT set.`);
+    console.warn(`ACTION CORS: Origin ${requestOrigin} is NOT allowed. Access-Control-Allow-Origin was NOT set.`);
   }
   // These headers are generally set for CORS responses
   responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -64,56 +66,70 @@ function setCorsHeaders(responseHeaders: Headers, requestOrigin: string | null) 
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  console.log("--- Loader: All Request Headers ---");
-  request.headers.forEach((value, key) => {
-    console.log(`Loader Header: ${key}: ${value}`);
-  });
-  console.log("-----------------------------------");
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] LOADER: Invoked for ${request.method} request to /api/pixel-events.`);
 
   const requestOrigin = request.headers.get("Origin");
+  console.log(`[${timestamp}] LOADER: Detected Origin: ${requestOrigin || "undefined"}`);
+
   const responseHeaders = new Headers();
-  setCorsHeaders(responseHeaders, requestOrigin); //This will set ACAO if origin is valid
 
   if (request.method === "OPTIONS") {
-    const originForLog = requestOrigin || "undefined";
-    const acaoValue = responseHeaders.get("Access-Control-Allow-Origin") || "Not Set";
-    console.log(`Remix API route: Handling OPTIONS request. Detected Origin: ${originForLog}. Responding with ACAO: ${acaoValue}`);
+    // Directly handle CORS headers for OPTIONS preflight
+    if (requestOrigin) {
+      // Basic check: For now, let's assume if Origin is present, allow it for OPTIONS
+      // More robust validation (like checking against getAllowedOrigins) can be added if this works
+      responseHeaders.set("Access-Control-Allow-Origin", requestOrigin);
+      console.log(`[${timestamp}] LOADER (OPTIONS): Set Access-Control-Allow-Origin to: ${requestOrigin}`);
+    } else {
+      console.log(`[${timestamp}] LOADER (OPTIONS): No Origin header detected. Access-Control-Allow-Origin NOT set.`);
+    }
+    responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+    responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Shopify-Hmac-Sha256");
+    responseHeaders.set("Access-Control-Max-Age", "86400"); // 24 hours
+    
+    console.log(`[${timestamp}] LOADER (OPTIONS): Responding with status 204.`);
     return new Response(null, { status: 204, headers: responseHeaders });
   }
 
-  // Fallback for other methods like GET if not explicitly handled
-  console.log(`Remix API route: ${request.method} request to /api/pixel-events, not allowed by loader.`);
+  // Fallback for other methods like GET if not explicitly handled by this route
+  console.log(`[${timestamp}] LOADER: ${request.method} request to /api/pixel-events, not allowed by loader. Responding 405.`);
+  // Set basic CORS headers even for errors, as the browser might still need them
+  if (requestOrigin) {
+    responseHeaders.set("Access-Control-Allow-Origin", requestOrigin); // Reflect origin if present
+  }
+  responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Shopify-Hmac-Sha256");
   return json({ error: "Method Not Allowed by loader" }, { status: 405, headers: responseHeaders });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  console.log("--- Action: All Request Headers ---");
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}] --- Action: Start ---`);
   request.headers.forEach((value, key) => {
-    console.log(`Action Header: ${key}: ${value}`);
+    console.log(`[${timestamp}] Action Header: ${key}: ${value}`);
   });
-  console.log("-----------------------------------");
+  console.log(`[${timestamp}] --- Action: End Headers ---`);
 
   const requestOrigin = request.headers.get("Origin");
   const responseHeaders = new Headers();
-  setCorsHeaders(responseHeaders, requestOrigin); //This will set ACAO if origin is valid
+  // Action will continue to use setCorsHeaders which has more robust origin checking
+  setCorsHeaders(responseHeaders, requestOrigin);
 
-  // Early exit if CORS pre-check failed (e.g. origin was present but not allowed)
-  // This relies on setCorsHeaders NOT setting ACAO if origin is disallowed.
   if (requestOrigin && !responseHeaders.has("Access-Control-Allow-Origin")) {
-    console.error(`CORS error in action: Origin ${requestOrigin} was present but not allowed by CORS policy.`);
+    console.error(`[${timestamp}] ACTION CORS ERROR: Origin ${requestOrigin} was present but not allowed by CORS policy.`);
     return json({ error: "CORS error", details: `Origin ${requestOrigin} not allowed` }, { status: 403, headers: responseHeaders });
   }
   
-  // Though OPTIONS should be handled by loader, catch it here defensively.
   if (request.method === "OPTIONS") {
-    const originForLog = requestOrigin || "undefined";
-    const acaoValue = responseHeaders.get("Access-Control-Allow-Origin") || "Not Set";
-    console.log(`Remix API route: Handling OPTIONS in action (fallback). Detected Origin: ${originForLog}. Responding with ACAO: ${acaoValue}`);
+    // This should ideally be fully handled by the loader.
+    // If it reaches here, it's a fallback.
+    console.warn(`[${timestamp}] ACTION (FALLBACK OPTIONS): Handling OPTIONS request. Origin: ${requestOrigin || "undefined"}. ACAO: ${responseHeaders.get("Access-Control-Allow-Origin") || "Not Set"}`);
     return new Response(null, { status: 204, headers: responseHeaders });
   }
 
   if (request.method !== "POST") {
-    console.log(`Remix API route: Method ${request.method} not allowed for /api/pixel-events.`);
+    console.log(`[${timestamp}] ACTION: Method ${request.method} not allowed for /api/pixel-events.`);
     return json({ error: "Method Not Allowed" }, { status: 405, headers: responseHeaders });
   }
 
@@ -126,10 +142,10 @@ export async function action({ request }: ActionFunctionArgs) {
     const uniqueToken = metadata?.uniqueToken || eventId;
 
     if (!eventName) {
-      console.error('Remix API route CRITICAL: eventName is missing. Body:', JSON.stringify(body, null, 2));
+      console.error(`[${timestamp}] ACTION CRITICAL: eventName is missing. Body:`, JSON.stringify(body, null, 2));
       return json({ error: 'eventName is missing' }, { status: 400, headers: responseHeaders });
     }
-    console.log(`Remix API route Processing event: ${eventName}, Shop: ${shopDomainFromReq}, Session: ${uniqueToken}`);
+    console.log(`[${timestamp}] ACTION: Processing event: ${eventName}, Shop: ${shopDomainFromReq}, Session: ${uniqueToken}`);
 
     let shop = null;
     if (shopDomainFromReq) {
@@ -137,13 +153,13 @@ export async function action({ request }: ActionFunctionArgs) {
         shop = await prisma.shop.findUnique({ where: { domain: shopDomainFromReq } });
         if (!shop) {
           shop = await prisma.shop.create({ data: { domain: shopDomainFromReq } });
-          console.log(`Remix API route Created new shop: ${shop.domain}`);
+          console.log(`[${timestamp}] ACTION: Created new shop: ${shop.domain}`);
         }
       } catch (e) {
-        console.error(`Remix API route Error finding/creating shop ${shopDomainFromReq}:`, e);
+        console.error(`[${timestamp}] ACTION: Error finding/creating shop ${shopDomainFromReq}:`, e);
       }
     } else {
-      console.warn('Remix API route: shopDomainFromReq is missing.');
+      console.warn(`[${timestamp}] ACTION: shopDomainFromReq is missing.`);
     }
 
     let createdOrFoundPixelSession = null;
@@ -167,12 +183,12 @@ export async function action({ request }: ActionFunctionArgs) {
             firstSeen: eventTimestamp ? new Date(eventTimestamp) : new Date(),
           },
         });
-        console.log(`Remix API route Upserted PixelSession: ${createdOrFoundPixelSession.id}`);
+        console.log(`[${timestamp}] ACTION: Upserted PixelSession: ${createdOrFoundPixelSession.id}`);
       } catch (e) {
-        console.error(`Remix API route Error upserting PixelSession ${uniqueToken}:`, e);
+        console.error(`[${timestamp}] ACTION: Error upserting PixelSession ${uniqueToken}:`, e);
       }
     } else {
-      console.warn('Remix API route: uniqueToken is missing for PixelSession.');
+      console.warn(`[${timestamp}] ACTION: uniqueToken is missing for PixelSession.`);
     }
 
     const pixelEventToCreate = {
@@ -187,11 +203,11 @@ export async function action({ request }: ActionFunctionArgs) {
     };
 
     const storedEvent = await prisma.pixelEvent.create({ data: pixelEventToCreate });
-    console.log('Remix API route Pixel event stored:', storedEvent.id);
+    console.log(`[${timestamp}] ACTION: Pixel event stored: ${storedEvent.id}`);
     return json({ message: 'Pixel event received and stored successfully', eventId: storedEvent.id }, { status: 200, headers: responseHeaders });
 
   } catch (error: any) {
-    console.error('Remix API route Error processing pixel event:', error);
+    console.error(`[${timestamp}] ACTION: Error processing pixel event:`, error);
     if (error.message.includes("JSON Parse error")) {
          return json({ error: 'Failed to parse JSON body' }, { status: 400, headers: responseHeaders });
     }
