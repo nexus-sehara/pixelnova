@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import prisma from "../db.server"; // Corrected path to Prisma client
+import prisma from "../db.server";
+import type { Prisma } from "@prisma/client"; // Import Prisma namespace for types
 
 console.log(`[${new Date().toISOString()}] MODULE LOADED: app/routes/api.pixel-events.ts`);
 
@@ -113,7 +114,6 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const requestOrigin = request.headers.get("Origin");
   const responseHeaders = new Headers();
-  // Action will continue to use setCorsHeaders which has more robust origin checking
   setCorsHeaders(responseHeaders, requestOrigin);
 
   if (requestOrigin && !responseHeaders.has("Access-Control-Allow-Origin")) {
@@ -122,8 +122,6 @@ export async function action({ request }: ActionFunctionArgs) {
   }
   
   if (request.method === "OPTIONS") {
-    // This should ideally be fully handled by the loader.
-    // If it reaches here, it's a fallback.
     console.warn(`[${timestamp}] ACTION (FALLBACK OPTIONS): Handling OPTIONS request. Origin: ${requestOrigin || "undefined"}. ACAO: ${responseHeaders.get("Access-Control-Allow-Origin") || "Not Set"}`);
     return new Response(null, { status: 204, headers: responseHeaders });
   }
@@ -133,88 +131,153 @@ export async function action({ request }: ActionFunctionArgs) {
     return json({ error: "Method Not Allowed" }, { status: 405, headers: responseHeaders });
   }
 
+  let body;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch (parseError: any) {
+    console.error(`[${timestamp}] ACTION CRITICAL: Failed to parse JSON body:`, parseError.message);
+    // Ensure CORS headers are on parse error responses too
+    return json({ error: "Failed to parse JSON body", details: parseError.message }, { status: 400, headers: responseHeaders });
+  }
+
+  try {
     const { metadata, context, id: eventId, timestamp: eventTimestamp } = body;
     const eventName = metadata?.eventName;
-
+    // Use shopDomainFromReq consistently, derived from the event body itself.
     const shopDomainFromReq = metadata?.shopDomain || context?.document?.location?.hostname || '';
-    const uniqueToken = metadata?.uniqueToken || eventId;
+
+    // This uniqueToken is from the original event structure, might be useful for raw event logging.
+    const uniqueToken = metadata?.uniqueToken || eventId; 
 
     if (!eventName) {
       console.error(`[${timestamp}] ACTION CRITICAL: eventName is missing. Body:`, JSON.stringify(body, null, 2));
       return json({ error: 'eventName is missing' }, { status: 400, headers: responseHeaders });
     }
-    console.log(`[${timestamp}] ACTION: Processing event: ${eventName}, Shop: ${shopDomainFromReq}, Session: ${uniqueToken}`);
+     if (!shopDomainFromReq) {
+      console.warn(`[${timestamp}] ACTION WARNING: shopDomainFromReq is missing or empty. Body:`, JSON.stringify(body, null, 2));
+      // Depending on requirements, you might return an error or try to proceed without shop association
+      return json({ error: 'shopDomainFromReq is missing' }, { status: 400, headers: responseHeaders });
+    }
+    console.log(`[${timestamp}] ACTION: Processing event: ${eventName}, Shop: ${shopDomainFromReq}, EventID: ${eventId}`);
 
-    let shop = null;
-    if (shopDomainFromReq) {
-      try {
-        shop = await prisma.shop.findUnique({ where: { domain: shopDomainFromReq } });
-        if (!shop) {
-          shop = await prisma.shop.create({ data: { domain: shopDomainFromReq } });
-          console.log(`[${timestamp}] ACTION: Created new shop: ${shop.domain}`);
-        }
-      } catch (e) {
-        console.error(`[${timestamp}] ACTION: Error finding/creating shop ${shopDomainFromReq}:`, e);
-      }
-    } else {
-      console.warn(`[${timestamp}] ACTION: shopDomainFromReq is missing.`);
+    // Upsert Shop
+    const shop = await prisma.shop.upsert({
+      where: { domain: shopDomainFromReq },
+      update: {},
+      create: { domain: shopDomainFromReq },
+    });
+    console.log(`[${timestamp}] ACTION: Ensured shop exists: ${shop.domain}, ID: ${shop.id}`);
+
+    const userAgent = request.headers.get("User-Agent"); // Get User-Agent from request headers
+    const sessionToken = body.id; // This is the event ID, unique per event. Used for PixelSession.sessionToken
+    const eventData = body.data;
+    const clientId = eventData?.clientId; // Stable anonymous ID from the event data
+
+    // Extract new identifiers from eventData
+    const checkoutToken = eventData?.checkout?.token;
+    const customerEmail = eventData?.checkout?.email;
+    const shopifyCustomerId = eventData?.checkout?.order?.customer?.id;
+    const shopifyOrderId = eventData?.checkout?.order?.id;
+
+    if (!sessionToken) { // sessionToken is body.id (eventId)
+      console.error(`[${timestamp}] ACTION CRITICAL: body.id (sessionToken/eventId) is missing. Body:`, JSON.stringify(body, null, 2));
+      return json({ error: 'body.id (eventId) is missing' }, { status: 400, headers: responseHeaders });
     }
 
-    let createdOrFoundPixelSession = null;
-    if (uniqueToken) {
-      try {
-        const userAgent = context?.navigator?.userAgent || '';
-        const eventClientId = body.clientId; // Extract clientId from the event body
+    let pixelSession;
 
-        const sessionData = {
-          lastActive: new Date(),
-          userAgent: userAgent,
-          requestShopDomain: shopDomainFromReq,
-          shopId: shop?.id,
-          clientId: eventClientId, // Include clientId in the data for upsert
-        };
-        createdOrFoundPixelSession = await prisma.pixelSession.upsert({
-          where: { sessionToken: uniqueToken },
-          update: sessionData,
-          create: {
-            sessionToken: uniqueToken,
-            userAgent: userAgent,
+    if (clientId) { // Primary path: session identified by clientId
+      pixelSession = await prisma.pixelSession.findFirst({
+        where: {
+          shopId: shop.id,
+          clientId: clientId,
+        },
+      });
+
+      if (pixelSession) {
+        // Update existing session
+        const updateData: Prisma.PixelSessionUpdateInput = {};
+        if (userAgent && pixelSession.userAgent !== userAgent) {
+          updateData.userAgent = userAgent;
+        }
+        if (checkoutToken && pixelSession.checkoutToken !== checkoutToken) {
+          updateData.checkoutToken = checkoutToken;
+        }
+        if (customerEmail && pixelSession.customerEmail !== customerEmail) {
+          updateData.customerEmail = customerEmail;
+        }
+        if (shopifyCustomerId && pixelSession.shopifyCustomerId !== shopifyCustomerId) {
+          updateData.shopifyCustomerId = shopifyCustomerId;
+        }
+        if (shopifyOrderId && pixelSession.shopifyOrderId !== shopifyOrderId) {
+          updateData.shopifyOrderId = shopifyOrderId;
+        }
+        // The sessionToken field in PixelSession stores the ID of the first event that created this clientId-based session.
+        // It's not updated here to preserve that original event ID. lastActive is handled by @updatedAt.
+
+        if (Object.keys(updateData).length > 0) {
+          pixelSession = await prisma.pixelSession.update({
+            where: { id: pixelSession.id },
+            data: updateData,
+          });
+          console.log(`[${timestamp}] ACTION: Updated PixelSession (clientId: ${clientId}): ${pixelSession.id} with data:`, JSON.stringify(updateData));
+        } else {
+          console.log(`[${timestamp}] ACTION: PixelSession (clientId: ${clientId}): ${pixelSession.id} found, no new data to update.`);
+        }
+      } else {
+        // Create new session with clientId
+        pixelSession = await prisma.pixelSession.create({
+          data: {
+            shopId: shop.id,
+            sessionToken: sessionToken, // ID of the event that initiated this clientId session
+            clientId: clientId,
+            userAgent: userAgent ?? undefined,
             requestShopDomain: shopDomainFromReq,
-            shopId: shop?.id,
-            clientId: eventClientId, // Include clientId when creating a new session
-            firstSeen: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+            ...(checkoutToken && { checkoutToken }),
+            ...(customerEmail && { customerEmail }),
+            ...(shopifyCustomerId && { shopifyCustomerId }),
+            ...(shopifyOrderId && { shopifyOrderId }),
           },
         });
-        console.log(`[${timestamp}] ACTION: Upserted PixelSession: ${createdOrFoundPixelSession.id}`);
-      } catch (e) {
-        console.error(`[${timestamp}] ACTION: Error upserting PixelSession ${uniqueToken}:`, e);
+        console.log(`[${timestamp}] ACTION: Created new PixelSession (clientId: ${clientId}): ${pixelSession.id}`);
       }
     } else {
-      console.warn(`[${timestamp}] ACTION: uniqueToken is missing for PixelSession.`);
+      // Fallback: no clientId. Create a PixelSession per event, using eventId as sessionToken.
+      // These sessions are isolated.
+      pixelSession = await prisma.pixelSession.create({
+        data: {
+          shopId: shop.id,
+          sessionToken: sessionToken, // Event ID as the session token
+          userAgent: userAgent ?? undefined,
+          requestShopDomain: shopDomainFromReq,
+          ...(checkoutToken && { checkoutToken }), // Still capture if available
+          ...(customerEmail && { customerEmail }),
+          ...(shopifyCustomerId && { shopifyCustomerId }),
+          ...(shopifyOrderId && { shopifyOrderId }),
+        },
+      });
+      console.log(`[${timestamp}] ACTION: Created new PixelSession (no clientId, eventId: ${sessionToken}): ${pixelSession.id}`);
     }
 
-    const pixelEventToCreate = {
-      eventType: eventName,
-      timestamp: eventTimestamp ? new Date(eventTimestamp) : new Date(),
-      userAgent: context?.navigator?.userAgent || '',
-      eventData: body,
-      requestShopDomain: shopDomainFromReq,
-      requestSessionToken: uniqueToken,
-      shopId: shop?.id,
-      pixelSessionId: createdOrFoundPixelSession?.id,
-    };
-
-    const storedEvent = await prisma.pixelEvent.create({ data: pixelEventToCreate });
-    console.log(`[${timestamp}] ACTION: Pixel event stored: ${storedEvent.id}`);
-    return json({ message: 'Pixel event received and stored successfully', eventId: storedEvent.id }, { status: 200, headers: responseHeaders });
+    // Create the PixelEvent
+    const newEvent = await prisma.pixelEvent.create({
+      data: {
+        eventType: eventName,
+        timestamp: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+        userAgent: userAgent ?? undefined, // Use userAgent from request headers
+        eventData: body, // Store the full event payload
+        requestShopDomain: shopDomainFromReq, // Denormalized from event
+        requestSessionToken: uniqueToken, // Denormalized uniqueToken from event (metadata.uniqueToken or eventId)
+        shopId: shop.id,
+        pixelSessionId: pixelSession.id, // Link to the created/found PixelSession
+      },
+    });
+    console.log(`[${timestamp}] ACTION: Pixel event stored: ${newEvent.id}, linked to PixelSession: ${pixelSession.id}`);
+    return json({ message: 'Pixel event received and stored successfully', eventId: newEvent.id, pixelSessionId: pixelSession.id }, { status: 200, headers: responseHeaders });
 
   } catch (error: any) {
-    console.error(`[${timestamp}] ACTION: Error processing pixel event:`, error);
-    if (error.message.includes("JSON Parse error")) {
-         return json({ error: 'Failed to parse JSON body' }, { status: 400, headers: responseHeaders });
-    }
-    return json({ error: 'Failed to process event', details: error.message }, { status: 500, headers: responseHeaders });
+    console.error(`[${timestamp}] ACTION: Error processing pixel event:`, error.message, error.stack);
+    // Ensure CORS headers are on error responses too
+    return json({ error: 'Failed to process pixel event', details: error.message }, { status: 500, headers: responseHeaders });
   }
 } 

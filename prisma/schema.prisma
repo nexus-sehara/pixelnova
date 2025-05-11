@@ -68,16 +68,27 @@ model PixelEvent {
 model PixelSession {
   id                 String    @id @default(cuid())
   shop               Shop?     @relation(fields: [shopId], references: [id])
-  shopId             String?   // Changed from Int? to String? to match Shop.id
-  sessionToken       String    @unique // This was from body.id or body.metadata.uniqueToken
-  clientId           String?   // Will store body.clientId
-  userAgent          String?   // Add this field back
+  shopId             String?
+  sessionToken       String    // This was from body.id
+  clientId           String?   // From body.clientId
+  userAgent          String?   
   requestShopDomain  String?
   firstSeen          DateTime  @default(now())
-  lastActive         DateTime @updatedAt
-  // eventCount         Int @default(0) // Can be calculated or updated via a transaction if needed
+  lastActive         DateTime  @updatedAt
 
-  events             PixelEvent[] // One session can have many events
+  // New fields for richer identification
+  checkoutToken      String?   // From body.data.checkout.token
+  customerEmail      String?   // From body.data.checkout.email
+  shopifyCustomerId  String?   // From body.data.checkout.order.customer.id
+  shopifyOrderId     String?   // From body.data.checkout.order.id (available on checkout_completed)
+
+  events             PixelEvent[]
 
   @@index([shopId])
+  @@index([sessionToken])
+  @@index([clientId])
+  @@index([checkoutToken])
+  @@index([customerEmail])
+  @@index([shopifyCustomerId])
+  @@index([shopifyOrderId])
 }
