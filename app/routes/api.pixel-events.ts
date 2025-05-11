@@ -1,88 +1,129 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import prisma from "../db.server"; // Corrected path to Prisma client
-import cors from "cors";
 
-const corsMiddleware = cors({
-  origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
-    console.log('CORS check (Remix API route): Request Origin:', origin);
-    if (!origin) {
-      console.log('CORS check (Remix API route): No origin present, allowing.');
-      return callback(null, true);
+// Allowed origins logic
+const getAllowedOrigins = () => {
+  const allowed: (string | RegExp)[] = [
+    /^https?:\/\/[a-zA-Z0-9-]+\.myshopify\.com$/, // Shopify store domains
+    /^https?:\/\/[a-zA-Z0-9-]+-pr-\d+\.onrender\.com$/, // Render preview domains
+  ];
+  if (process.env.SHOPIFY_APP_URL) {
+    try {
+      const customDomain = new URL(process.env.SHOPIFY_APP_URL).origin;
+      allowed.push(customDomain);
+    } catch (e) {
+      console.error("Invalid SHOPIFY_APP_URL for CORS:", e);
     }
-    // Corrected regex patterns
-    const shopifyDomainPattern = /^https?:\/\/[a-zA-Z0-9-]+\.myshopify\.com$/;
-    const renderPreviewPattern = /^https?:\/\/[a-zA-Z0-9-]+-pr-\d+\.onrender\.com$/;
-    const customDomain = process.env.SHOPIFY_APP_URL ? new URL(process.env.SHOPIFY_APP_URL).origin : null;
-
-    if (shopifyDomainPattern.test(origin) || renderPreviewPattern.test(origin) || (customDomain && origin === customDomain)) {
-      console.log(`CORS check (Remix API route): Origin ${origin} allowed.`);
-      callback(null, true);
-    } else {
-      console.error(`CORS check (Remix API route): Origin ${origin} NOT allowed.`);
-      callback(new Error(`Origin ${origin} not allowed by CORS`));
+  }
+  // For local development with Shopify CLI, ngrok URLs might be used
+  if (process.env.NODE_ENV === 'development' && process.env.HOST) {
+    try {
+        const localTunnel = new URL(process.env.HOST).origin;
+        allowed.push(localTunnel);
+    } catch(e) {
+        console.warn("Could not add HOST to allowed origins for local dev:", e);
     }
-  },
-  methods: ['POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept'],
-  credentials: true,
-  maxAge: 86400, // 24 hours
-  optionsSuccessStatus: 200
-});
+  }
+  return allowed;
+};
 
-function runCorsMiddleware(req: Request, resHeaders: Headers) {
-  return new Promise<Headers>((resolve, reject) => {
-    const mockRes = {
-      setHeader: (name: string, value: string) => resHeaders.set(name, value),
-      getHeader: (name: string) => resHeaders.get(name),
-      end: () => resolve(resHeaders),
-    };
-    (corsMiddleware as any)(req, mockRes, (err: any) => {
-      if (err) {
-        console.error("Error in CORS middleware:", err);
-        reject(err);
-      } else {
-        resolve(resHeaders);
+function setCorsHeaders(responseHeaders: Headers, requestOrigin: string | null) {
+  const allowedOriginsPatterns = getAllowedOrigins();
+  let originAllowed = false;
+
+  if (requestOrigin) {
+    for (const pattern of allowedOriginsPatterns) {
+      if (typeof pattern === 'string' && pattern === requestOrigin) {
+        originAllowed = true;
+        break;
       }
-    });
-  });
+      if (pattern instanceof RegExp && pattern.test(requestOrigin)) {
+        originAllowed = true;
+        break;
+      }
+    }
+  } else {
+    // If no origin header is present, we might allow (e.g. for server-to-server or if not strictly required)
+    // However, for web pixel (browser context) an Origin header is expected.
+    // For now, let's be strict: if origin is expected for CORS, it must be present and match.
+    // If you want to allow requests with no origin, this logic would need adjustment.
+    console.log("CORS: No Origin header present in the request.");
+    // originAllowed = true; // Example: uncomment to allow requests with no Origin header
+  }
+
+  if (originAllowed && requestOrigin) {
+    responseHeaders.set("Access-Control-Allow-Origin", requestOrigin);
+    responseHeaders.set("Access-Control-Allow-Credentials", "true");
+  } else if (requestOrigin) {
+    // If origin was present but not allowed, don't set Allow-Origin
+    // The browser will block it, which is the correct behavior.
+    console.warn(`CORS: Origin ${requestOrigin} is not allowed.`);
+  }
+  // These headers are often set even if origin isn't matched, or for preflight.
+  responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Shopify-Hmac-Sha256");
+  responseHeaders.set("Access-Control-Max-Age", "86400"); // 24 hours
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  console.log("--- Loader: All Request Headers ---");
+  request.headers.forEach((value, key) => {
+    console.log(`Header: ${key}: ${value}`);
+  });
+  console.log("-----------------------------------");
+
+  const requestOrigin = request.headers.get("Origin");
   const responseHeaders = new Headers();
-  // For OPTIONS requests, it's common to handle them early and return.
-  // The action function will also run CORS, but for OPTIONS, loader is often sufficient.
+  setCorsHeaders(responseHeaders, requestOrigin);
+
   if (request.method === "OPTIONS") {
-    console.log("Remix API route: Handling OPTIONS request in loader for /api/pixel-events");
-    try {
-      await runCorsMiddleware(request, responseHeaders);
+    console.log("Remix API route: Handling OPTIONS request in loader for /api/pixel-events. Origin:", requestOrigin);
+    // Check if origin was allowed by setCorsHeaders implicitly
+    // If Access-Control-Allow-Origin is set, it means origin was matched and allowed
+    if (requestOrigin && responseHeaders.has("Access-Control-Allow-Origin")) {
       return new Response(null, { status: 204, headers: responseHeaders });
-    } catch (corsError) {
-      console.error("CORS error in loader OPTIONS:", corsError);
-      return json({ error: "CORS error", details: (corsError as Error).message }, { status: 403 }); // No need to pass responseHeaders here, it's a fresh json response
+    } else if (!requestOrigin) {
+        // Allow OPTIONS if no origin for cases like simple health checks or if policy is relaxed
+        // However, for a browser's preflight, origin should be present.
+        // This case might need review based on actual scenarios.
+        console.log("Remix API route: OPTIONS request with no Origin header. Responding 204.");
+        return new Response(null, { status: 204, headers: responseHeaders }); // Still send general CORS headers
+    } else {
+      console.warn(`Remix API route: OPTIONS request from disallowed origin ${requestOrigin}. Responding 403.`);
+      // It's better to return 204 for OPTIONS even if origin is denied, as per some interpretations.
+      // The actual POST will be blocked. Or return 403. For now, let's send 204.
+      return new Response(null, { status: 204, headers: responseHeaders });
+      // Alternative for strict denial:
+      // return new Response("CORS: Origin not allowed for OPTIONS", { status: 403, headers: responseHeaders });
     }
   }
 
-  // For other methods like GET, if not allowed:
-  await runCorsMiddleware(request, responseHeaders); // Still run for other methods to set headers if needed by client for error display
-  console.log("Remix API route: GET request to /api/pixel-events, method not allowed.");
-  return json({ error: "Method Not Allowed" }, { status: 405, headers: responseHeaders });
+  console.log(`Remix API route: ${request.method} request to /api/pixel-events, method not allowed by loader.`);
+  return json({ error: "Method Not Allowed by loader" }, { status: 405, headers: responseHeaders });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const responseHeaders = new Headers();
+  console.log("--- Action: All Request Headers ---");
+  request.headers.forEach((value, key) => {
+    console.log(`Header: ${key}: ${value}`);
+  });
+  console.log("-----------------------------------");
 
-  try {
-    await runCorsMiddleware(request, responseHeaders);
-  } catch (corsError) {
-    console.error("CORS error in action:", corsError);
-    return json({ error: "CORS error", details: (corsError as Error).message }, { status: 403, headers: responseHeaders });
+  const requestOrigin = request.headers.get("Origin");
+  const responseHeaders = new Headers();
+  setCorsHeaders(responseHeaders, requestOrigin);
+
+  // If origin was required, present, but not allowed, Access-Control-Allow-Origin won't be set.
+  // The browser will block this client-side. For server-side, we can reject early.
+  if (requestOrigin && !responseHeaders.has("Access-Control-Allow-Origin")) {
+    console.error(`CORS error in action: Origin ${requestOrigin} not allowed.`);
+    return json({ error: "CORS error", details: `Origin ${requestOrigin} not allowed` }, { status: 403, headers: responseHeaders });
   }
   
-  // OPTIONS requests should ideally be fully handled by the loader or an earlier middleware.
-  // If an OPTIONS request somehow reaches here, respond appropriately.
   if (request.method === "OPTIONS") {
-    console.log("Remix API route: Handling OPTIONS request in action for /api/pixel-events (should have been caught by loader ideally)");
+    console.log("Remix API route: Handling OPTIONS request in action (should have been caught by loader). Origin:", requestOrigin);
+    // This should ideally be handled by the loader.
     return new Response(null, { status: 204, headers: responseHeaders });
   }
 
