@@ -17,10 +17,10 @@ Migration created (add_clientid_to_pixelsession). (✅ Done)
 Application code in api.pixel-events.ts updated to populate PixelSession.clientId. (✅ Done)
 Testing & Validation (Next Step after deployment):
 Deploy the latest changes (including PixelSession.clientId population).
-Verify new PixelSession records have clientId populated.
-Analyze event distribution by shopId and clientId to confirm improved anonymous session grouping. Check if clientId remains stable for a single user across multiple page views/events within the same browser session.
+Verify new PixelSession records have clientId populated. (✅ Done)
+Analyze event distribution by shopId and clientId to confirm improved anonymous session grouping. Check if clientId remains stable for a single user across multiple page views/events within the same browser session. (✅ Done)
 Phase 2: Introduce Richer Identifiers & Basic User Journey Stitching
-Objective: Enhance session/user identification by incorporating checkout_token and customerId when available.
+Objective: Enhance session/user identification by incorporating checkout_token and customerId when available. (✅ Done)
 Rationale: clientId is good for anonymous browsing, but checkout_token links a whole purchase funnel, and customerId links events to a known user account.
 Tasks:
 Analyze eventData for Key Events:

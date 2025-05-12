@@ -37,29 +37,36 @@ model Shop {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  pixelEvents  PixelEvent[]
-  pixelSessions PixelSession[]
+  pixelEvents     PixelEvent[]
+  pixelSessions   PixelSession[]
   productMetadata ProductMetadata[]
+  productViews    ProductView[]
+  cartActions     CartAction[]
+  orders          Order[]
 }
 
 model PixelEvent {
-  id           String    @id @default(cuid())
-  eventType    String
-  timestamp    DateTime  @default(now())
-  userAgent    String?
-  eventData    Json      // Store the full event payload
-  
+  id        String   @id @default(cuid())
+  eventType String
+  timestamp DateTime @default(now())
+  userAgent String?
+  eventData Json // Store the full event payload
+
   // Denormalized for potential direct queries, not part of a relation itself here
-  requestShopDomain String? // The domain as received in the request
+  requestShopDomain   String? // The domain as received in the request
   requestSessionToken String? // The session token as received in the request
 
   // Relation to Shop model
-  shopId       String?   // Foreign key
-  shop         Shop?     @relation(fields: [shopId], references: [id])
+  shopId String? // Foreign key
+  shop   Shop?   @relation(fields: [shopId], references: [id])
 
   // Relation to PixelSession model
-  pixelSessionId String?      // Foreign key
+  pixelSessionId String? // Foreign key
   pixelSession   PixelSession? @relation(fields: [pixelSessionId], references: [id])
+
+  productViews ProductView[]
+  cartActions  CartAction[]
+  orders       Order[]
 
   @@index([shopId])
   @@index([pixelSessionId])
@@ -67,24 +74,28 @@ model PixelEvent {
 }
 
 model PixelSession {
-  id                 String    @id @default(cuid())
-  shop               Shop?     @relation(fields: [shopId], references: [id])
-  shopId             String?
-  sessionToken       String    // This was from body.id
-  clientId           String?   // From body.clientId
-  userAgent          String?   
-  requestShopDomain  String?
-  firstSeen          DateTime  @default(now())
-  lastActive         DateTime  @updatedAt
+  id                String   @id @default(cuid())
+  shop              Shop?    @relation(fields: [shopId], references: [id])
+  shopId            String?
+  sessionToken      String // This was from body.id
+  clientId          String? // From body.clientId
+  userAgent         String?
+  requestShopDomain String?
+  firstSeen         DateTime @default(now())
+  lastActive        DateTime @updatedAt
 
   // New fields for richer identification
-  checkoutToken      String?   // From body.data.checkout.token
-  customerEmail      String?   // From body.data.checkout.email
-  shopifyCustomerId  String?   // From body.data.checkout.order.customer.id
-  shopifyOrderId     String?   // From body.data.checkout.order.id (available on checkout_completed)
+  checkoutToken     String? // From body.data.checkout.token
+  customerEmail     String? // From body.data.checkout.email
+  shopifyCustomerId String? // From body.data.checkout.order.customer.id
+  shopifyOrderId    String? // From body.data.checkout.order.id (available on checkout_completed)
 
-  events             PixelEvent[]
+  events       PixelEvent[]
+  productViews ProductView[]
+  cartActions  CartAction[]
+  orders       Order[]
 
+  @@unique([shopId, clientId], name: "shopId_clientId_unique")
   @@index([shopId])
   @@index([sessionToken])
   @@index([clientId])
@@ -92,41 +103,132 @@ model PixelSession {
   @@index([customerEmail])
   @@index([shopifyCustomerId])
   @@index([shopifyOrderId])
-  @@unique([shopId, clientId], name: "shopId_clientId_unique")
 }
 
 model ProductMetadata {
-  id                 String    @id @default(cuid())
-  shopifyProductId   String    @unique // e.g., gid://shopify/Product/12345
-  shopId             String
-  shop               Shop      @relation(fields: [shopId], references: [id])
+  id               String @id @default(cuid())
+  shopifyProductId String @unique // e.g., gid://shopify/Product/12345
+  shopId           String
+  shop             Shop   @relation(fields: [shopId], references: [id])
 
-  title              String
-  handle             String?
-  productType        String?
-  vendor             String?
-  tags               String[]  @default([])
-  status             String?   // e.g., ACTIVE, ARCHIVED, DRAFT
+  title       String
+  handle      String?
+  productType String?
+  vendor      String?
+  tags        String[] @default([])
+  status      String? // e.g., ACTIVE, ARCHIVED, DRAFT
 
-  minVariantPrice    Float?    // Minimum price of its variants
-  maxVariantPrice    Float?    // Maximum price of its variants
-  currencyCode       String?   // Currency code for the prices
+  minVariantPrice Float? // Minimum price of its variants
+  maxVariantPrice Float? // Maximum price of its variants
+  currencyCode    String? // Currency code for the prices
 
-  featuredImageUrl   String?
-  
+  featuredImageUrl String?
+
   // For MVP, storing some denormalized variant and collection data as JSON.
   // Can be normalized to separate tables in a later phase if complex querying is needed.
-  variantsData       Json?     // Array of basic variant info: [{ id, title, price, sku, inventoryQuantity, inventoryPolicy, imageUrl }]
-  collectionsData    Json?     // Array of collection info: [{ id, title, handle }]
+  variantsData    Json? // Array of basic variant info: [{ id, title, price, sku, inventoryQuantity, inventoryPolicy, imageUrl }]
+  collectionsData Json? // Array of collection info: [{ id, title, handle }]
 
-  shopifyCreatedAt   DateTime? // Product creation date in Shopify
-  shopifyUpdatedAt   DateTime? // Product last update date in Shopify
+  shopifyCreatedAt DateTime? // Product creation date in Shopify
+  shopifyUpdatedAt DateTime? // Product last update date in Shopify
 
-  lastFetchedAt      DateTime  @default(now()) // When NovaPixel last fetched/updated this data
-  pixelNovaUpdatedAt DateTime  @updatedAt      // When this record was updated in NovaPixel DB
+  lastFetchedAt      DateTime @default(now()) // When NovaPixel last fetched/updated this data
+  pixelNovaUpdatedAt DateTime @updatedAt // When this record was updated in NovaPixel DB
+
+  productViews ProductView[] @relation("ProductMetadataToProductView")
+  cartActions  CartAction[]  @relation("ProductMetadataToCartAction")
+  orderItems   OrderItem[]   @relation("ProductMetadataToOrderItem")
 
   @@index([shopId])
   @@index([shopId, productType])
   @@index([shopId, vendor])
   @@index([shopId, status])
+}
+
+/// ProductView: Tracks every time a product is viewed
+model ProductView {
+  id                String           @id @default(cuid())
+  shopId            String
+  shop              Shop             @relation(fields: [shopId], references: [id])
+  productId         String
+  product           ProductMetadata? @relation("ProductMetadataToProductView", fields: [productId], references: [shopifyProductId])
+  variantId         String?
+  viewedAt          DateTime         @default(now())
+  pixelSessionId    String?
+  pixelSession      PixelSession?    @relation(fields: [pixelSessionId], references: [id])
+  clientId          String
+  checkoutToken     String?
+  shopifyCustomerId String?
+  eventId           String?
+  pixelEvent        PixelEvent?      @relation(fields: [eventId], references: [id])
+
+  @@index([shopId])
+  @@index([productId])
+  @@index([clientId])
+  @@index([checkoutToken])
+  @@index([shopifyCustomerId])
+}
+
+/// CartAction: Tracks add/remove/update cart actions
+model CartAction {
+  id                String           @id @default(cuid())
+  shopId            String
+  shop              Shop             @relation(fields: [shopId], references: [id])
+  productId         String
+  product           ProductMetadata? @relation("ProductMetadataToCartAction", fields: [productId], references: [shopifyProductId])
+  variantId         String?
+  actionType        String
+  quantity          Int
+  timestamp         DateTime         @default(now())
+  pixelSessionId    String?
+  pixelSession      PixelSession?    @relation(fields: [pixelSessionId], references: [id])
+  clientId          String
+  checkoutToken     String?
+  shopifyCustomerId String?
+  eventId           String?
+  pixelEvent        PixelEvent?      @relation(fields: [eventId], references: [id])
+
+  @@index([shopId])
+  @@index([productId])
+  @@index([clientId])
+  @@index([checkoutToken])
+  @@index([shopifyCustomerId])
+}
+
+/// Order: Tracks completed checkouts
+model Order {
+  id                String        @id @default(cuid())
+  shopId            String
+  shop              Shop          @relation(fields: [shopId], references: [id])
+  shopifyOrderId    String
+  pixelSessionId    String?
+  pixelSession      PixelSession? @relation(fields: [pixelSessionId], references: [id])
+  clientId          String
+  checkoutToken     String?
+  shopifyCustomerId String?
+  createdAt         DateTime      @default(now())
+  eventId           String?
+  pixelEvent        PixelEvent?   @relation(fields: [eventId], references: [id])
+  orderItems        OrderItem[]
+
+  @@index([shopId])
+  @@index([shopifyOrderId])
+  @@index([clientId])
+  @@index([checkoutToken])
+  @@index([shopifyCustomerId])
+}
+
+/// OrderItem: Line items for each order
+model OrderItem {
+  id        String           @id @default(cuid())
+  orderId   String
+  order     Order            @relation(fields: [orderId], references: [id])
+  productId String
+  product   ProductMetadata? @relation("ProductMetadataToOrderItem", fields: [productId], references: [shopifyProductId])
+  variantId String?
+  quantity  Int
+  price     Float
+
+  @@index([orderId])
+  @@index([productId])
 }

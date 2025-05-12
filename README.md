@@ -1,372 +1,226 @@
 # Shopify App Template - Remix
 
-This is a template for building a [Shopify app](https://shopify.dev/docs/apps/getting-started) using the [Remix](https://remix.run) framework.
 
-Rather than cloning this repo, you can use your preferred package manager and the Shopify CLI with [these steps](https://shopify.dev/docs/apps/getting-started/create).
+## Product Metadata Sync Script
 
-Visit the [`shopify.dev` documentation](https://shopify.dev/docs/api/shopify-app-remix) for more details on the Remix app package.
+This project includes a script to safely sync product metadata for all (or specific) shops, with rate limit protection and flexible configuration.
 
-## Quick start
+### 1. Example `.env` Settings
 
-### Prerequisites
+Add these lines to your `.env` file in the project root (create the file if it doesn't exist):
 
-Before you begin, you'll need the following:
+```env
+# Delay (in ms) between each product fetch for a shop (rate limit safety)
+SYNC_PRODUCT_DELAY_MS=200
 
-1. **Node.js**: [Download and install](https://nodejs.org/en/download/) it if you haven't already.
-2. **Shopify Partner Account**: [Create an account](https://partners.shopify.com/signup) if you don't have one.
-3. **Test Store**: Set up either a [development store](https://help.shopify.com/en/partners/dashboard/development-stores#create-a-development-store) or a [Shopify Plus sandbox store](https://help.shopify.com/en/partners/dashboard/managing-stores/plus-sandbox-store) for testing your app.
+# Delay (in ms) between processing each shop
+SYNC_SHOP_DELAY_MS=1000
 
-### Setup
-
-If you used the CLI to create the template, you can skip this section.
-
-Using yarn:
-
-```shell
-yarn install
+# Max number of products to sync per shop (for safety, not enforced in current script but ready for future use)
+SYNC_MAX_PRODUCTS_PER_SHOP=1000
 ```
 
-Using npm:
+You can adjust these values as needed for your environment and rate limit comfort.
 
-```shell
-npm install
-```
+---
 
-Using pnpm:
+### 2. How to Run the Script
 
-```shell
-pnpm install
-```
+From your project root, run:
 
-### Local Development
+- **Dry run (default, no DB writes):**
+  ```bash
+  npx ts-node scripts/sync-products.ts
+  ```
 
-Using yarn:
+- **Actually upsert product metadata (be careful!):**
+  ```bash
+  npx ts-node scripts/sync-products.ts --run
+  ```
 
-```shell
-yarn dev
-```
+- **Sync a specific shop only:**
+  ```bash
+  npx ts-node scripts/sync-products.ts --shop=yourshop.myshopify.com --run
+  ```
 
-Using npm:
+- **Override delays on the command line:**
+  ```bash
+  npx ts-node scripts/sync-products.ts --run --delay=300 --shop-delay=2000
+  ```
 
-```shell
-npm run dev
-```
+---
 
-Using pnpm:
+### 3. What to Expect
 
-```shell
-pnpm run dev
-```
+- The script will log the settings it's using.
+- It will process each shop (or just the one you specify), waiting between shops.
+- For each product, it will wait the configured delay.
+- In dry run mode, it will only log what it would do.
+- In `--run` mode, it will actually upsert product metadata.
 
-Press P to open the URL to your app. Once you click install, you can start development.
+---
 
-Local development is powered by [the Shopify CLI](https://shopify.dev/docs/apps/tools/cli). It logs into your partners account, connects to an app, provides environment variables, updates remote config, creates a tunnel and provides commands to generate extensions.
+## Product Metadata Sync API Endpoint
 
-### Authenticating and querying data
+This app provides a secure API endpoint to trigger product metadata sync for all (or specific) shops.
 
-To authenticate and query data you can use the `shopify` const that is exported from `/app/shopify.server.js`:
+### 1. Set up your secret
 
-```js
-export async function loader({ request }) {
-  const { admin } = await shopify.authenticate.admin(request);
-
-  const response = await admin.graphql(`
-    {
-      products(first: 25) {
-        nodes {
-          title
-          description
-        }
-      }
-    }`);
-
-  const {
-    data: {
-      products: { nodes },
-    },
-  } = await response.json();
-
-  return nodes;
-}
-```
-
-This template comes preconfigured with examples of:
-
-1. Setting up your Shopify app in [/app/shopify.server.ts](https://github.com/Shopify/shopify-app-template-remix/blob/main/app/shopify.server.ts)
-2. Querying data using Graphql. Please see: [/app/routes/app.\_index.tsx](https://github.com/Shopify/shopify-app-template-remix/blob/main/app/routes/app._index.tsx).
-3. Responding to mandatory webhooks in [/app/routes/webhooks.tsx](https://github.com/Shopify/shopify-app-template-remix/blob/main/app/routes/webhooks.tsx)
-
-Please read the [documentation for @shopify/shopify-app-remix](https://www.npmjs.com/package/@shopify/shopify-app-remix#authenticating-admin-requests) to understand what other API's are available.
-
-## Deployment
-
-### Application Storage
-
-This template uses [Prisma](https://www.prisma.io/) to store session data, by default using an [SQLite](https://www.sqlite.org/index.html) database.
-The database is defined as a Prisma schema in `prisma/schema.prisma`.
-
-This use of SQLite works in production if your app runs as a single instance.
-The database that works best for you depends on the data your app needs and how it is queried.
-You can run your database of choice on a server yourself or host it with a SaaS company.
-Here’s a short list of databases providers that provide a free tier to get started:
-
-| Database   | Type             | Hosters                                                                                                                                                                                                                               |
-| ---------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MySQL      | SQL              | [Digital Ocean](https://www.digitalocean.com/products/managed-databases-mysql), [Planet Scale](https://planetscale.com/), [Amazon Aurora](https://aws.amazon.com/rds/aurora/), [Google Cloud SQL](https://cloud.google.com/sql/docs/mysql) |
-| PostgreSQL | SQL              | [Digital Ocean](https://www.digitalocean.com/products/managed-databases-postgresql), [Amazon Aurora](https://aws.amazon.com/rds/aurora/), [Google Cloud SQL](https://cloud.google.com/sql/docs/postgres)                                   |
-| Redis      | Key-value        | [Digital Ocean](https://www.digitalocean.com/products/managed-databases-redis), [Amazon MemoryDB](https://aws.amazon.com/memorydb/)                                                                                                        |
-| MongoDB    | NoSQL / Document | [Digital Ocean](https://www.digitalocean.com/products/managed-databases-mongodb), [MongoDB Atlas](https://www.mongodb.com/atlas/database)                                                                                                  |
-
-To use one of these, you can use a different [datasource provider](https://www.prisma.io/docs/reference/api-reference/prisma-schema-reference#datasource) in your `schema.prisma` file, or a different [SessionStorage adapter package](https://github.com/Shopify/shopify-api-js/blob/main/packages/shopify-api/docs/guides/session-storage.md).
-
-### Build
-
-Remix handles building the app for you, by running the command below with the package manager of your choice:
-
-Using yarn:
-
-```shell
-yarn build
-```
-
-Using npm:
-
-```shell
-npm run build
-```
-
-Using pnpm:
-
-```shell
-pnpm run build
-```
-
-## Hosting
-
-When you're ready to set up your app in production, you can follow [our deployment documentation](https://shopify.dev/docs/apps/deployment/web) to host your app on a cloud provider like [Heroku](https://www.heroku.com/) or [Fly.io](https://fly.io/).
-
-When you reach the step for [setting up environment variables](https://shopify.dev/docs/apps/deployment/web#set-env-vars), you also need to set the variable `NODE_ENV=production`.
-
-### Hosting on Vercel
-
-Using the Vercel Preset is recommended when hosting your Shopify Remix app on Vercel. You'll also want to ensure imports that would normally come from `@remix-run/node` are imported from `@vercel/remix` instead. Learn more about hosting Remix apps on Vercel [here](https://vercel.com/docs/frameworks/remix).
-
-```diff
-// vite.config.ts
-import { vitePlugin as remix } from "@remix-run/dev";
-import { defineConfig, type UserConfig } from "vite";
-import tsconfigPaths from "vite-tsconfig-paths";
-+ import { vercelPreset } from '@vercel/remix/vite';
-
-installGlobals();
-
-export default defineConfig({
-  plugins: [
-    remix({
-      ignoredRouteFiles: ["**/.*"],
-+     presets: [vercelPreset()],
-    }),
-    tsconfigPaths(),
-  ],
-});
-```
-
-## Troubleshooting
-
-### Database tables don't exist
-
-If you get this error:
+Add this to your `.env` file (in the project root):
 
 ```
-The table `main.Session` does not exist in the current database.
+SYNC_SECRET=your-very-strong-secret
 ```
 
-You need to create the database for Prisma. Run the `setup` script in `package.json` using your preferred package manager.
-
-### Navigating/redirecting breaks an embedded app
-
-Embedded Shopify apps must maintain the user session, which can be tricky inside an iFrame. To avoid issues:
-
-1. Use `Link` from `@remix-run/react` or `@shopify/polaris`. Do not use `<a>`.
-2. Use the `redirect` helper returned from `authenticate.admin`. Do not use `redirect` from `@remix-run/node`
-3. Use `useSubmit` or `<Form/>` from `@remix-run/react`. Do not use a lowercase `<form/>`.
-
-This only applies if your app is embedded, which it will be by default.
-
-### Non Embedded
-
-Shopify apps are best when they are embedded in the Shopify Admin, which is how this template is configured. If you have a reason to not embed your app please make the following changes:
-
-1. Ensure `embedded = false` is set in [shopify.app.toml`](./shopify.app.toml). [Docs here](https://shopify.dev/docs/apps/build/cli-for-apps/app-configuration#global).
-2. Pass `isEmbeddedApp: false` to `shopifyApp()` in `./app/shopify.server.js|ts`.
-3. Change the `isEmbeddedApp` prop to `isEmbeddedApp={false}` for the `AppProvider` in `/app/routes/app.jsx|tsx`.
-4. Remove the `@shopify/app-bridge-react` dependency from [package.json](./package.json) and `vite.config.ts|js`.
-5. Remove anything imported from `@shopify/app-bridge-react`.  For example: `NavMenu`, `TitleBar` and `useAppBridge`.
-
-### OAuth goes into a loop when I change my app's scopes
-
-If you change your app's scopes and authentication goes into a loop and fails with a message from Shopify that it tried too many times, you might have forgotten to update your scopes with Shopify.
-To do that, you can run the `deploy` CLI command.
-
-Using yarn:
-
-```shell
-yarn deploy
-```
-
-Using npm:
-
-```shell
-npm run deploy
-```
-
-Using pnpm:
-
-```shell
-pnpm run deploy
-```
-
-### My shop-specific webhook subscriptions aren't updated
-
-If you are registering webhooks in the `afterAuth` hook, using `shopify.registerWebhooks`, you may find that your subscriptions aren't being updated.  
-
-Instead of using the `afterAuth` hook, the recommended approach is to declare app-specific webhooks in the `shopify.app.toml` file.  This approach is easier since Shopify will automatically update changes to webhook subscriptions every time you run `deploy` (e.g: `npm run deploy`).  Please read these guides to understand more:
-
-1. [app-specific vs shop-specific webhooks](https://shopify.dev/docs/apps/build/webhooks/subscribe#app-specific-subscriptions)
-2. [Create a subscription tutorial](https://shopify.dev/docs/apps/build/webhooks/subscribe/get-started?framework=remix&deliveryMethod=https)
-
-If you do need shop-specific webhooks, please keep in mind that the package calls `afterAuth` in 2 scenarios:
-
-- After installing the app
-- When an access token expires
-
-During normal development, the app won't need to re-authenticate most of the time, so shop-specific subscriptions aren't updated. To force your app to update the subscriptions, you can uninstall and reinstall it in your development store. That will force the OAuth process and call the `afterAuth` hook.
-
-### Admin created webhook failing HMAC validation
-
-Webhooks subscriptions created in the [Shopify admin](https://help.shopify.com/en/manual/orders/notifications/webhooks) will fail HMAC validation. This is because the webhook payload is not signed with your app's secret key.  There are 2 solutions:
-
-1. Use [app-specific webhooks](https://shopify.dev/docs/apps/build/webhooks/subscribe#app-specific-subscriptions) defined in your toml file instead (recommended)
-2. Create [webhook subscriptions](https://shopify.dev/docs/api/shopify-app-remix/v1/guide-webhooks) using the `shopifyApp` object.
-
-Test your webhooks with the [Shopify CLI](https://shopify.dev/docs/apps/tools/cli/commands#webhook-trigger) or by triggering events manually in the Shopify admin(e.g. Updating the product title to trigger a `PRODUCTS_UPDATE`).
-
-### Incorrect GraphQL Hints
-
-By default the [graphql.vscode-graphql](https://marketplace.visualstudio.com/items?itemName=GraphQL.vscode-graphql) extension for VS Code will assume that GraphQL queries or mutations are for the [Shopify Admin API](https://shopify.dev/docs/api/admin). This is a sensible default, but it may not be true if:
-
-1. You use another Shopify API such as the storefront API.
-2. You use a third party GraphQL API.
-
-in this situation, please update the [.graphqlrc.ts](https://github.com/Shopify/shopify-app-template-remix/blob/main/.graphqlrc.ts) config.
-
-### First parameter has member 'readable' that is not a ReadableStream.
-
-See [hosting on Vercel](#hosting-on-vercel).
-
-### Admin object undefined on webhook events triggered by the CLI
-
-When you trigger a webhook event using the Shopify CLI, the `admin` object will be `undefined`. This is because the CLI triggers an event with a valid, but non-existent, shop. The `admin` object is only available when the webhook is triggered by a shop that has installed the app.
-
-Webhooks triggered by the CLI are intended for initial experimentation testing of your webhook configuration. For more information on how to test your webhooks, see the [Shopify CLI documentation](https://shopify.dev/docs/apps/tools/cli/commands#webhook-trigger).
-
-### Using Defer & await for streaming responses
-
-To test [streaming using defer/await](https://remix.run/docs/en/main/guides/streaming) during local development you'll need to use the Shopify CLI slightly differently:
-
-1. First setup ngrok: https://ngrok.com/product/secure-tunnels
-2. Create an ngrok tunnel on port 8080: `ngrok http 8080`.
-3. Copy the forwarding address. This should be something like: `https://f355-2607-fea8-bb5c-8700-7972-d2b5-3f2b-94ab.ngrok-free.app`
-4. In a separate terminal run `yarn shopify app dev --tunnel-url=TUNNEL_URL:8080` replacing `TUNNEL_URL` for the address you copied in step 3.
-
-By default the CLI uses a cloudflare tunnel. Unfortunately it cloudflare tunnels wait for the Response stream to finish, then sends one chunk.
-
-This will not affect production, since tunnels are only for local development.
-
-### Using MongoDB and Prisma
-
-By default this template uses SQLlite as the database. It is recommended to move to a persisted database for production. If you choose to use MongoDB, you will need to make some modifications to the schema and prisma configuration. For more information please see the [Prisma MongoDB documentation](https://www.prisma.io/docs/orm/overview/databases/mongodb).
-
-Alternatively you can use a MongDB database directly with the [MongoDB session storage adapter](https://github.com/Shopify/shopify-app-js/tree/main/packages/apps/session-storage/shopify-app-session-storage-mongodb).
-
-#### Mapping the id field
-
-In MongoDB, an ID must be a single field that defines an @id attribute and a @map("\_id") attribute.
-The prisma adapter expects the ID field to be the ID of the session, and not the \_id field of the document.
-
-To make this work you can add a new field to the schema that maps the \_id field to the id field. For more information see the [Prisma documentation](https://www.prisma.io/docs/orm/prisma-schema/data-model/models#defining-an-id-field)
-
-```prisma
-model Session {
-  session_id  String    @id @default(auto()) @map("_id") @db.ObjectId
-  id          String    @unique
-...
-}
-```
-
-#### Error: The "mongodb" provider is not supported with this command
-
-MongoDB does not support the [prisma migrate](https://www.prisma.io/docs/orm/prisma-migrate/understanding-prisma-migrate/overview) command. Instead, you can use the [prisma db push](https://www.prisma.io/docs/orm/reference/prisma-cli-reference#db-push) command and update the `shopify.web.toml` file with the following commands. If you are using MongoDB please see the [Prisma documentation](https://www.prisma.io/docs/orm/overview/databases/mongodb) for more information.
-
-```toml
-[commands]
-predev = "npx prisma generate && npx prisma db push"
-dev = "npm exec remix vite:dev"
-```
-
-#### Prisma needs to perform transactions, which requires your mongodb server to be run as a replica set
-
-See the [Prisma documentation](https://www.prisma.io/docs/getting-started/setup-prisma/start-from-scratch/mongodb/connect-your-database-node-mongodb) for connecting to a MongoDB database.
-
-### I want to use Polaris v13.0.0 or higher
-
-Currently, this template is set up to work on node v18.20 or higher. However, `@shopify/polaris` is limited to v12 because v13 can only run on node v20+.
-
-You don't have to make any changes to the code in order to be able to upgrade Polaris to v13, but you'll need to do the following:
-
-- Upgrade your node version to v20.10 or higher.
-- Update your `Dockerfile` to pull `FROM node:20-alpine` instead of `node:18-alpine`
-
-### "nbf" claim timestamp check failed
-
-This error will occur of the `nbf` claim timestamp check failed. This is because the JWT token is expired.
-If you  are consistently getting this error, it could be that the clock on your machine is not in sync with the server.
-
-To fix this ensure you have enabled `Set time and date automatically` in the `Date and Time` settings on your computer.
-
-## Benefits
-
-Shopify apps are built on a variety of Shopify tools to create a great merchant experience.
-
-<!-- TODO: Uncomment this after we've updated the docs -->
-<!-- The [create an app](https://shopify.dev/docs/apps/getting-started/create) tutorial in our developer documentation will guide you through creating a Shopify app using this template. -->
-
-The Remix app template comes with the following out-of-the-box functionality:
-
-- [OAuth](https://github.com/Shopify/shopify-app-js/tree/main/packages/shopify-app-remix#authenticating-admin-requests): Installing the app and granting permissions
-- [GraphQL Admin API](https://github.com/Shopify/shopify-app-js/tree/main/packages/shopify-app-remix#using-the-shopify-admin-graphql-api): Querying or mutating Shopify admin data
-- [Webhooks](https://github.com/Shopify/shopify-app-js/tree/main/packages/shopify-app-remix#authenticating-webhook-requests): Callbacks sent by Shopify when certain events occur
-- [AppBridge](https://shopify.dev/docs/api/app-bridge): This template uses the next generation of the Shopify App Bridge library which works in unison with previous versions.
-- [Polaris](https://polaris.shopify.com/): Design system that enables apps to create Shopify-like experiences
-
-## Tech Stack
-
-This template uses [Remix](https://remix.run). The following Shopify tools are also included to ease app development:
-
-- [Shopify App Remix](https://shopify.dev/docs/api/shopify-app-remix) provides authentication and methods for interacting with Shopify APIs.
-- [Shopify App Bridge](https://shopify.dev/docs/apps/tools/app-bridge) allows your app to seamlessly integrate your app within Shopify's Admin.
-- [Polaris React](https://polaris.shopify.com/) is a powerful design system and component library that helps developers build high quality, consistent experiences for Shopify merchants.
-- [Webhooks](https://github.com/Shopify/shopify-app-js/tree/main/packages/shopify-app-remix#authenticating-webhook-requests): Callbacks sent by Shopify when certain events occur
-- [Polaris](https://polaris.shopify.com/): Design system that enables apps to create Shopify-like experiences
-
-## Resources
-
-- [Remix Docs](https://remix.run/docs/en/v1)
-- [Shopify App Remix](https://shopify.dev/docs/api/shopify-app-remix)
-- [Introduction to Shopify apps](https://shopify.dev/docs/apps/getting-started)
-- [App authentication](https://shopify.dev/docs/apps/auth)
-- [Shopify CLI](https://shopify.dev/docs/apps/tools/cli)
-- [App extensions](https://shopify.dev/docs/apps/app-extensions/list)
-- [Shopify Functions](https://shopify.dev/docs/api/functions)
-- [Getting started with internationalizing your app](https://shopify.dev/docs/apps/best-practices/internationalization/getting-started)
-# pixelnova
+- **What is SYNC_SECRET?**
+  - It is a long, random string used to protect your sync endpoint from unauthorized access.
+  - Generate one with a password manager or with:
+    ```bash
+    openssl rand -hex 32
+    ```
+  - Example: `SYNC_SECRET=2f8b1c4e5d6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c`
+
+### 2. How to trigger the sync
+
+- **Locally (if running on port 3000):**
+  ```bash
+  curl -X POST "http://localhost:3000/api/admin/sync-products?token=your-very-strong-secret"
+  ```
+- **On production:**
+  ```bash
+  curl -X POST "https://your-app-url/api/admin/sync-products?token=your-very-strong-secret"
+  ```
+- **Sync a specific shop:**
+  ```bash
+  curl -X POST "http://localhost:3000/api/admin/sync-products?token=your-very-strong-secret&shop=yourshop.myshopify.com"
+  ```
+
+### 3. Security notes
+- **Keep your SYNC_SECRET safe and never share it publicly.**
+- Always use HTTPS in production.
+- For extra security, restrict access by IP (e.g., only allow your scheduler or CI/CD IPs).
+- Rotate your secret periodically.
+
+### 4. Scheduling the sync
+- Use a service like Render Scheduler, GitHub Actions, or a cron job to hit the endpoint on a schedule.
+- Example GitHub Actions step:
+  ```yaml
+  - name: Trigger product sync
+    run: |
+      curl -X POST "https://your-app-url/api/admin/sync-products?token=${{ secrets.SYNC_SECRET }}"
+  ```
+
+---
+
+curl -X POST "http://localhost:3000/api/admin/sync-products?token=2f8b1c4e5d6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c"
+
+
+
+
+Our guiding principles will be iterative development, ensuring data integrity at each step, and making data-driven decisions for schema and logic enhancements.
+Goal: Develop a fully functional, well-structured Shopify app capable of collecting customer behavior data and leveraging it for effective product recommendations.
+Phase 1: Solidify Raw Event Ingestion & Anonymous Session Tracking (Current - Near Completion)
+Objective: Reliably capture all raw web pixel events and implement the best possible anonymous session tracking with currently available data.
+Tasks & Current Status:
+Web Pixel Event Endpoint (app/routes/api.pixel-events.ts):
+Receives events from Shopify's web pixel. (✅ Done)
+Handles CORS correctly for OPTIONS and POST. (✅ Done, browser console quirk noted but core functionality working)
+Stores raw event payload (eventData) in PixelEvent table. (✅ Done)
+Basic Shop Model:
+Stores shop domain and associates with events/sessions. (✅ Done)
+PixelEvent Model:
+Stores raw eventData, eventType, timestamp, shopId, etc. (✅ Done)
+PixelSession Model:
+Currently uses sessionToken (derived from body.id) which creates many distinct sessions.
+Action Item (In Progress): Enhance PixelSession to store clientId from the event body.
+Schema updated. (✅ Done)
+Migration created (add_clientid_to_pixelsession). (✅ Done)
+Application code in api.pixel-events.ts updated to populate PixelSession.clientId. (✅ Done)
+Testing & Validation (Next Step after deployment):
+Deploy the latest changes (including PixelSession.clientId population).
+Verify new PixelSession records have clientId populated.
+Analyze event distribution by shopId and clientId to confirm improved anonymous session grouping. Check if clientId remains stable for a single user across multiple page views/events within the same browser session.
+Phase 2: Introduce Richer Identifiers & Basic User Journey Stitching
+Objective: Enhance session/user identification by incorporating checkout_token and customerId when available.
+Rationale: clientId is good for anonymous browsing, but checkout_token links a whole purchase funnel, and customerId links events to a known user account.
+Tasks:
+Analyze eventData for Key Events:
+Collect and analyze eventData samples for checkout_started, checkout_completed, and any events fired when a user is logged in (e.g., page_viewed by a logged-in user).
+Identify where checkout_token (or similar like cart_token) and customer.id are located within the JSON structure of these events.
+Enhance PixelSession (or introduce UserJourney):
+Option A (Simpler): Add optional checkoutToken (String) and shopifyCustomerId (String) fields to the PixelSession model.
+Option B (More Robust): Introduce a new UserJourney model that can be linked to PixelSession records. This UserJourney would store clientId, checkoutToken, shopifyCustomerId, shopId, firstSeen, lastActive.
+Decision Point: We'll decide between Option A or B based on the complexity and the need for a separate journey abstraction. Initially, Option A might be sufficient.
+Update Event Processing Logic (api.pixel-events.ts):
+Extract checkout_token and customer.id from eventData if present.
+When creating/upserting PixelSession (or UserJourney):
+If customer.id is present, use that as the primary key for linking activity.
+Else if checkout_token is present, use that.
+Else, fall back to clientId.
+Update existing PixelSession/UserJourney records if a less specific identifier (like clientId) can now be enriched with a checkout_token or customerId.
+Schema Changes & Migrations:
+Update schema.prisma based on the chosen option.
+Run npx prisma migrate dev.
+Testing & Validation:
+Deploy changes.
+Simulate user flows: anonymous browsing, adding to cart, starting checkout (as guest), logging in, completing checkout.
+Verify that PixelSession (or UserJourney) records are correctly populated and linked using the richest available identifier.
+Analyze data to see how many previously separate clientId sessions can now be stitched into single checkoutToken or shopifyCustomerId journeys.
+Phase 3: Structured Product & Behavior Data
+Objective: Transform raw event data into structured tables for products and key user behaviors, facilitating easier and more performant querying for recommendations.
+Rationale: Querying JSON blobs is inefficient for complex aggregations. Structured tables are better for most recommendation algorithms.
+Tasks:
+ProductMetadata Table:
+Design and implement a ProductMetadata table (similar to your initial plan: productId, shopDomain, title, tags, type, vendor, collections, price).
+Population Strategy:
+Write a script/background job that:
+Extracts distinct product.id and variant.id values from product_viewed, collection_viewed, product_added_to_cart, checkout_completed events in PixelEvent.eventData.
+Uses the Shopify Admin API (via shopify.server.js) to fetch detailed product information for these IDs. This ensures data accuracy and completeness.
+Upserts this information into ProductMetadata.
+Structured Behavior Tables (Iterative Implementation):
+ProductView Table:
+Fields: productId, variantId, viewedAt, shopId, link to PixelSession.id (or UserJourney.id), potentially referringProduct/Collection if easily derivable.
+Populate from product_viewed events in PixelEvent.eventData.
+CartAction Table:
+Fields: productId, variantId, quantity, actionType (added, removed, updated), timestamp, shopId, link to session/journey.
+Populate from product_added_to_cart, product_removed_from_cart events.
+Order & OrderItem Tables:
+Populate from checkout_completed events.
+Schema Changes & Migrations.
+Data Backfill (Optional but Recommended):
+Consider writing a one-time script to process existing PixelEvent data to populate these new structured tables.
+Testing & Validation:
+Verify data is correctly transformed and loaded into the new tables.
+Test queries against these tables for common recommendation scenarios (e.g., "products viewed by users who viewed product X").
+Phase 4: Recommendation Algorithm Development & User Profile Building
+Objective: Implement initial recommendation algorithms and start building user profiles.
+Tasks:
+Algorithm Selection & Implementation (Start Simple):
+"Frequently Viewed Together": Based on co-occurrence of products in ProductView records sharing the same session/journey ID.
+"Frequently Bought Together": Based on co-occurrence of products in OrderItem records.
+"Popular Products": Based on view counts (ProductView) or purchase counts (OrderItem).
+UserProfile Table (Simplified Initial Version):
+Fields: userId (could be shopifyCustomerId or a generated ID linked to clientId/checkoutToken), shopId, viewedProductIds (array), purchasedProductIds (array), lastActive.
+Populate by aggregating data from ProductView and Order tables.
+ProductRecommendation Table:
+Store pre-calculated recommendations (source product, recommended product, score, type).
+Develop jobs to calculate and update these recommendations periodically.
+API Endpoint for Recommendations:
+Create a Remix action/loader to serve recommendations based on a given product or user.
+Testing & Validation:
+Verify recommendation outputs make sense.
+Test API endpoint.
+Start measuring basic metrics (e.g., click-through rate if recommendations are displayed).
+Phase 5: Advanced Recommendations, Personalization & A/B Testing
+Objective: Enhance recommendation quality with more advanced algorithms, deeper personalization, and an A/B testing framework.
+Tasks:
+Explore collaborative filtering, content-based filtering, or hybrid models.
+Refine UserProfile with more features (preferred categories, brands, price sensitivity).
+Implement A/B testing for different recommendation strategies.
+Performance optimization and scaling.
+Cross-Cutting Concerns (Throughout All Phases):
+Data Privacy & Compliance: Ensure all data handling adheres to Shopify policies and relevant privacy regulations (GDPR, CCPA, etc.). Anonymize/pseudonymize data where appropriate.
+Error Handling & Monitoring: Implement robust error handling and logging for event ingestion and all data processing jobs.
+Scalability: Design database queries and data processing with scalability in mind.
+Code Quality & Testing: Maintain high code quality with appropriate unit and integration tests.
+Documentation: Document schema decisions, data flows, and API endpoints.
