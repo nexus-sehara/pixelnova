@@ -244,45 +244,80 @@ export async function action({ request }: ActionFunctionArgs) {
     });
     console.log(`[${timestamp}] ACTION: Pixel event stored: ${newEvent.id}, linked to PixelSession: ${pixelSession.id}`);
     
+
     // --- Structured Table Ingestion ---
     // Product View
     if (eventName === "product_viewed" && eventData?.productId) {
-      await prisma.productView.create({
-        data: {
-          shopId: shop.id,
-          productId: eventData.productId,
-          variantId: eventData.variantId ?? undefined,
-          viewedAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
-          pixelSessionId: pixelSession.id,
-          clientId: clientId ?? undefined,
-          checkoutToken: checkoutToken ?? undefined,
-          shopifyCustomerId: shopifyCustomerId ?? undefined,
-          eventId: newEvent.id,
-        }
+      const productMeta = await prisma.productMetadata.findUnique({
+        where: { shopifyProductId: eventData.productId },
       });
+      if (!productMeta) {
+        console.warn(
+          `[${timestamp}] ProductView skipped: ProductMetadata not found for productId: ${eventData.productId}`
+        );
+      } else {
+        await prisma.productView.create({
+          data: {
+            shopId: shop.id,
+            productId: eventData.productId,
+            variantId: eventData.variantId ?? undefined,
+            viewedAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+            pixelSessionId: pixelSession.id,
+            clientId: clientId ?? undefined,
+            checkoutToken: checkoutToken ?? undefined,
+            shopifyCustomerId: shopifyCustomerId ?? undefined,
+            eventId: newEvent.id,
+          }
+        });
+      }
     }
 
     // Cart Actions
     if ((eventName === "product_added_to_cart" || eventName === "product_removed_from_cart") && eventData?.cartLine) {
-      await prisma.cartAction.create({
-        data: {
-          shopId: shop.id,
-          productId: eventData.cartLine?.merchandise?.product?.id ?? eventData.productId,
-          variantId: eventData.cartLine?.merchandise?.id ?? eventData.variantId,
-          actionType: eventName === "product_added_to_cart" ? "add" : "remove",
-          quantity: eventData.cartLine?.quantity ?? 1,
-          timestamp: eventTimestamp ? new Date(eventTimestamp) : new Date(),
-          pixelSessionId: pixelSession.id,
-          clientId: clientId ?? undefined,
-          checkoutToken: checkoutToken ?? undefined,
-          shopifyCustomerId: shopifyCustomerId ?? undefined,
-          eventId: newEvent.id,
-        }
+      const productId = eventData.cartLine?.merchandise?.product?.id ?? eventData.productId;
+      const productMeta = await prisma.productMetadata.findUnique({
+        where: { shopifyProductId: productId },
       });
+      if (!productMeta) {
+        console.warn(
+          `[${timestamp}] CartAction skipped: ProductMetadata not found for productId: ${productId}`
+        );
+      } else {
+        await prisma.cartAction.create({
+          data: {
+            shopId: shop.id,
+            productId,
+            variantId: eventData.cartLine?.merchandise?.id ?? eventData.variantId,
+            actionType: eventName === "product_added_to_cart" ? "add" : "remove",
+            quantity: eventData.cartLine?.quantity ?? 1,
+            timestamp: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+            pixelSessionId: pixelSession.id,
+            clientId: clientId ?? undefined,
+            checkoutToken: checkoutToken ?? undefined,
+            shopifyCustomerId: shopifyCustomerId ?? undefined,
+            eventId: newEvent.id,
+          }
+        });
+      }
     }
 
     // Order (checkout_completed)
     if (eventName === "checkout_completed" && eventData?.checkout?.order) {
+      // Only create orderItems for which ProductMetadata exists
+      const orderItemsToCreate = (eventData.checkout.order.lineItems || []).filter((item: any) => !!item.product?.id)
+        .filter(async (item: any) => {
+          const meta = await prisma.productMetadata.findUnique({ where: { shopifyProductId: item.product.id } });
+          if (!meta) {
+            console.warn(
+              `[${timestamp}] OrderItem skipped: ProductMetadata not found for productId: ${item.product.id}`
+            );
+            return false;
+          }
+          return true;
+        });
+      // Await all filter promises
+      const filteredOrderItems = await Promise.all(orderItemsToCreate);
+      const validOrderItems = (eventData.checkout.order.lineItems || []).filter((item: any, idx: number) => filteredOrderItems[idx]);
       const order = await prisma.order.create({
         data: {
           shopId: shop.id,
@@ -294,7 +329,7 @@ export async function action({ request }: ActionFunctionArgs) {
           createdAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
           eventId: newEvent.id,
           orderItems: {
-            create: (eventData.checkout.order.lineItems || []).map((item: any) => ({
+            create: validOrderItems.map((item: any) => ({
               productId: item.product?.id,
               variantId: item.variantId ?? item.variant?.id,
               quantity: item.quantity ?? 1,
