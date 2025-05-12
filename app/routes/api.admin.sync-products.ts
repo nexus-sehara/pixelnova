@@ -1,7 +1,7 @@
 import { json } from "@remix-run/node";
-import prisma from "~/db.server";
-import { syncAllProductMetadata } from "~/lib/product-metadata.server";
-import shopify from "~/shopify.server";
+import prisma from "../db.server";
+import { syncAllProductMetadata } from "../lib/product-metadata.server";
+import shopify from "../shopify.server";
 
 export const action = async ({ request }) => {
   // Simple token check (add to your .env: SYNC_SECRET=your-secret)
@@ -44,20 +44,20 @@ export const action = async ({ request }) => {
         scope: session.scope,
         expires: session.expires,
       },
-      apiVersion: shopify.apiVersion,
+      apiVersion: (shopify as any).apiVersion,
     });
 
     try {
       await syncAllProductMetadata(admin, shop.id, shop.domain);
       results.push({ shop: shop.domain, status: "ok" });
     } catch (err) {
-      results.push({ shop: shop.domain, error: err.message });
+      results.push({ shop: shop.domain, error: (err as Error).message });
     }
   }
 
   return json({ results });
 };
 
-export const loader = async () => {
+export const loader = async (_args: { request: Request }) => {
   return json({ error: "POST only" }, { status: 405 });
 }; 
