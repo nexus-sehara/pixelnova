@@ -105,7 +105,7 @@ export async function getDistinctProductGidsFromEvents(shopId: string, since?: D
 /**
  * Fetches product details from Shopify Admin API for a given Product GID.
  */
-export async function fetchProductDetailsFromShopify(admin: any, productId: string): Promise<any | null> { // Replace 'any' with a proper Shopify Admin API client type
+export async function fetchProductDetailsFromShopify(admin: any, productId: string): Promise<any | null> {
   console.log(`[ProductMetadata] Fetching details for product GID: ${productId} from Shopify`);
   const graphqlQuery = `
     query getProductDetails($id: ID!) {
@@ -132,7 +132,7 @@ export async function fetchProductDetailsFromShopify(admin: any, productId: stri
             currencyCode
           }
         }
-        variants(first: 10) { # Limiting to 10 variants for now, can be configured
+        variants(first: 10) {
           edges {
             node {
               id
@@ -140,12 +140,11 @@ export async function fetchProductDetailsFromShopify(admin: any, productId: stri
               sku
               price
               inventoryQuantity
-              # inventoryPolicy # This might require higher permissions or specific API version
               image { url }
             }
           }
         }
-        collections(first: 10) { # Limiting to 10 collections
+        collections(first: 10) {
           edges {
             node {
               id
@@ -159,16 +158,22 @@ export async function fetchProductDetailsFromShopify(admin: any, productId: stri
   `;
 
   try {
-    // Assuming 'admin.graphql' is the method to make GraphQL calls
-    // This needs to be adapted based on how you get an authenticated Shopify admin client
     const response = await admin.graphql(graphqlQuery, { variables: { id: productId } });
-    
-    // Basic check for response structure - needs to be robust
-    if (!response || !response.product) { // Check based on actual Shopify API response structure
-        console.error(`[ProductMetadata] No product data returned for GID: ${productId}`, response);
-        return null;
+    const contentType = response.headers.get('content-type');
+    let responseBody;
+    if (contentType && contentType.includes('application/json')) {
+      responseBody = await response.json();
+    } else {
+      responseBody = await response.text();
+      console.error(`[ProductMetadata] Shopify API did not return JSON. Raw response:`, responseBody);
+      return null;
     }
-    return response.product; // Or response.data.product depending on your GraphQL client
+
+    if (!responseBody || !responseBody.data || !responseBody.data.product) {
+      console.error(`[ProductMetadata] No product data returned for GID: ${productId}. Full response:`, JSON.stringify(responseBody, null, 2));
+      return null;
+    }
+    return responseBody.data.product;
   } catch (error) {
     console.error(`[ProductMetadata] Error fetching product ${productId} from Shopify:`, error);
     return null;
