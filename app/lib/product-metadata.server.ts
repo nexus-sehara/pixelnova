@@ -161,11 +161,12 @@ export async function fetchProductDetailsFromShopify(admin: any, productId: stri
     const response = await admin.graphql(graphqlQuery, { variables: { id: productId } });
     const contentType = response.headers.get('content-type');
     let responseBody;
-    if (contentType && contentType.includes('application/json')) {
+    try {
       responseBody = await response.json();
-    } else {
-      responseBody = await response.text();
-      console.error(`[ProductMetadata] Shopify API did not return JSON. Raw response:`, responseBody);
+    } catch (jsonErr) {
+      // If JSON parsing fails, log the error and try to log the raw text
+      const rawText = await response.text();
+      console.error(`[ProductMetadata] Failed to parse JSON. Content-Type: ${contentType}. Raw response:`, rawText);
       return null;
     }
 
