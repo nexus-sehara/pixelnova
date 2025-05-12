@@ -244,6 +244,68 @@ export async function action({ request }: ActionFunctionArgs) {
     });
     console.log(`[${timestamp}] ACTION: Pixel event stored: ${newEvent.id}, linked to PixelSession: ${pixelSession.id}`);
     
+    // --- Structured Table Ingestion ---
+    // Product View
+    if (eventName === "product_viewed" && eventData?.productId) {
+      await prisma.productView.create({
+        data: {
+          shopId: shop.id,
+          productId: eventData.productId,
+          variantId: eventData.variantId ?? undefined,
+          viewedAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+          pixelSessionId: pixelSession.id,
+          clientId: clientId ?? undefined,
+          checkoutToken: checkoutToken ?? undefined,
+          shopifyCustomerId: shopifyCustomerId ?? undefined,
+          eventId: newEvent.id,
+        }
+      });
+    }
+
+    // Cart Actions
+    if ((eventName === "product_added_to_cart" || eventName === "product_removed_from_cart") && eventData?.cartLine) {
+      await prisma.cartAction.create({
+        data: {
+          shopId: shop.id,
+          productId: eventData.cartLine?.merchandise?.product?.id ?? eventData.productId,
+          variantId: eventData.cartLine?.merchandise?.id ?? eventData.variantId,
+          actionType: eventName === "product_added_to_cart" ? "add" : "remove",
+          quantity: eventData.cartLine?.quantity ?? 1,
+          timestamp: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+          pixelSessionId: pixelSession.id,
+          clientId: clientId ?? undefined,
+          checkoutToken: checkoutToken ?? undefined,
+          shopifyCustomerId: shopifyCustomerId ?? undefined,
+          eventId: newEvent.id,
+        }
+      });
+    }
+
+    // Order (checkout_completed)
+    if (eventName === "checkout_completed" && eventData?.checkout?.order) {
+      const order = await prisma.order.create({
+        data: {
+          shopId: shop.id,
+          shopifyOrderId: eventData.checkout.order.id,
+          pixelSessionId: pixelSession.id,
+          clientId: clientId ?? undefined,
+          checkoutToken: checkoutToken ?? undefined,
+          shopifyCustomerId: shopifyCustomerId ?? undefined,
+          createdAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+          eventId: newEvent.id,
+          orderItems: {
+            create: (eventData.checkout.order.lineItems || []).map((item: any) => ({
+              productId: item.product?.id,
+              variantId: item.variantId ?? item.variant?.id,
+              quantity: item.quantity ?? 1,
+              price: item.price ?? 0,
+            }))
+          }
+        }
+      });
+    }
+    // --- End Structured Table Ingestion ---
+
     // Re-affirm ACAO header for the actual POST response
     if (requestOrigin && responseHeaders.has("Access-Control-Allow-Origin")) {
         // This check ensures we only re-affirm if it was allowed and set by setCorsHeaders initially
