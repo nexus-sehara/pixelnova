@@ -45,32 +45,38 @@ export async function getDistinctProductGidsFromEvents(shopId: string, since?: D
       // Ensure it's a numeric ID after stripping potential GID prefix (in case it's sometimes a GID)
       if (/^\d+$/.test(numericProductId) && !data.data.productVariant.product.id.startsWith(DRAFT_ORDER_PREFIX)) {
         extractedGid = `${PRODUCT_PREFIX}${numericProductId}`;
+        console.log(`[ProductMetadata] Extracted GID from product_viewed: ${extractedGid} from event:`, JSON.stringify(event, null, 2));
+      } else {
+        console.log(`[ProductMetadata] Skipped product_viewed GID: ${data.data.productVariant.product.id}`);
       }
     } else if (data.product?.id && typeof data.product.id === 'string' && data.product.id.startsWith('gid://shopify/Product/')) {
       // Common for product_viewed, etc. directly having product.id (Original Check)
       extractedGid = data.product.id;
+      console.log(`[ProductMetadata] Extracted GID from data.product.id: ${extractedGid}`);
     } else if (data.cartLine?.merchandise?.product?.id && typeof data.cartLine.merchandise.product.id === 'string' && data.cartLine.merchandise.product.id.startsWith('gid://shopify/Product/')) {
       // Common for product_added_to_cart
       extractedGid = data.cartLine.merchandise.product.id;
+      console.log(`[ProductMetadata] Extracted GID from cartLine: ${extractedGid}`);
     } else if (data.checkout?.lineItems && Array.isArray(data.checkout.lineItems)) {
       // For checkout_started, checkout_completed
       const PRODUCT_PREFIX = "gid://shopify/Product/";
-      const DRAFT_ORDER_PREFIX = "gid://shopify/DraftOrder/"; // Added to avoid processing draft order items as products
-
+      const DRAFT_ORDER_PREFIX = "gid://shopify/DraftOrder/";
       data.checkout.lineItems.forEach((item: any) => {
         const productId = item.variant?.product?.id;
         if (productId && typeof productId === 'string') {
-          const numericProductId = productId.replace(PRODUCT_PREFIX, ""); // Remove prefix if it already exists
-          // Ensure it's a numeric ID and not a draft order GID path
+          const numericProductId = productId.replace(PRODUCT_PREFIX, "");
           if (/^\d+$/.test(numericProductId) && !productId.startsWith(DRAFT_ORDER_PREFIX)) {
-            productGids.add(`${PRODUCT_PREFIX}${numericProductId}`);
+            const gid = `${PRODUCT_PREFIX}${numericProductId}`;
+            productGids.add(gid);
+            console.log(`[ProductMetadata] Extracted GID from checkout.lineItems: ${gid} from event:`, JSON.stringify(event, null, 2));
+          } else {
+            console.log(`[ProductMetadata] Skipped checkout.lineItems GID: ${productId}`);
           }
         }
       });
     } else if (event.eventType === 'product_viewed' && data.id && typeof data.id === 'string' && data.id.startsWith('gid://shopify/Product/')) {
-      // Some product_viewed events might have the GID directly at data.id (less common, but covering bases)
-      // This path is speculative and depends on actual event payloads seen
       extractedGid = data.id;
+      console.log(`[ProductMetadata] Extracted GID from data.id: ${extractedGid}`);
     }
     // Potentially more complex parsing for other event types like 'collection_viewed'
     // For 'collection_viewed', data.collection.products.edges[].node.id might be the path for products within that collection context
@@ -88,6 +94,7 @@ export async function getDistinctProductGidsFromEvents(shopId: string, since?: D
 
     if (extractedGid) {
       productGids.add(extractedGid);
+      console.log(`[ProductMetadata] Added GID to set: ${extractedGid}`);
     }
   });
 
@@ -274,9 +281,12 @@ export async function syncAllProductMetadata(admin: any, shopId: string, shopDom
         console.warn(`[ProductMetadata] Skipping invalid or non-product GID: ${gid}`);
         continue;
     }
+    console.log(`[ProductMetadata] Attempting to fetch product details for GID: ${gid}`);
     const productData = await fetchProductDetailsFromShopify(admin, gid);
     if (productData) {
       await upsertProductMetadata(shopId, productData);
+    } else {
+      console.warn(`[ProductMetadata] No product data returned from Shopify for GID: ${gid}`);
     }
   }
   console.log(`[ProductMetadata] Finished sync for shop: ${shopDomain}`);
