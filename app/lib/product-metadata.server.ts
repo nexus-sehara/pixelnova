@@ -206,8 +206,12 @@ export async function upsertProductMetadata(
     vendor: shopifyProductData.vendor,
     tags: shopifyProductData.tags || [],
     status: shopifyProductData.status,
-    minVariantPrice: shopifyProductData.priceRangeV2?.minVariantPrice?.amount,
-    maxVariantPrice: shopifyProductData.priceRangeV2?.maxVariantPrice?.amount,
+    minVariantPrice: shopifyProductData.priceRangeV2?.minVariantPrice?.amount
+      ? parseFloat(shopifyProductData.priceRangeV2.minVariantPrice.amount)
+      : undefined,
+    maxVariantPrice: shopifyProductData.priceRangeV2?.maxVariantPrice?.amount
+      ? parseFloat(shopifyProductData.priceRangeV2.maxVariantPrice.amount)
+      : undefined,
     currencyCode: shopifyProductData.priceRangeV2?.minVariantPrice?.currencyCode, // Assuming currency is same for min/max
     featuredImageUrl: shopifyProductData.featuredImage?.url,
     variantsData: shopifyProductData.variants?.edges.map((edge: any) => edge.node) || Prisma.JsonNull,
@@ -227,8 +231,12 @@ export async function upsertProductMetadata(
     vendor: shopifyProductData.vendor,
     tags: shopifyProductData.tags || [],
     status: shopifyProductData.status,
-    minVariantPrice: shopifyProductData.priceRangeV2?.minVariantPrice?.amount,
-    maxVariantPrice: shopifyProductData.priceRangeV2?.maxVariantPrice?.amount,
+    minVariantPrice: shopifyProductData.priceRangeV2?.minVariantPrice?.amount
+      ? parseFloat(shopifyProductData.priceRangeV2.minVariantPrice.amount)
+      : undefined,
+    maxVariantPrice: shopifyProductData.priceRangeV2?.maxVariantPrice?.amount
+      ? parseFloat(shopifyProductData.priceRangeV2.maxVariantPrice.amount)
+      : undefined,
     currencyCode: shopifyProductData.priceRangeV2?.minVariantPrice?.currencyCode,
     featuredImageUrl: shopifyProductData.featuredImage?.url,
     variantsData: shopifyProductData.variants?.edges.map((edge: any) => edge.node) || Prisma.JsonNull,
