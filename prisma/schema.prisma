@@ -232,3 +232,67 @@ model OrderItem {
   @@index([orderId])
   @@index([productId])
 }
+
+model UserProfile {
+  id                String   @id @default(cuid())
+  userId            String
+  shopDomain        String
+  preferredCategories String[]
+  preferredTags     String[]
+  preferredBrands   String[]
+  preferredPriceMin Float?
+  preferredPriceMax Float?
+  lastUpdated       DateTime @default(now())
+
+  @@unique([userId, shopDomain])
+  @@index([shopDomain])
+}
+
+model ProductCooccurrence {
+  id                String   @id @default(cuid())
+  shopId            String
+  productId         String
+  coViewedProductId String
+  score             Float
+  lastUpdated       DateTime @default(now())
+
+  @@index([shopId, productId])
+  @@index([shopId, coViewedProductId])
+  @@unique([shopId, productId, coViewedProductId])
+}
+
+model FrequentlyBoughtTogether {
+  id                  String   @id @default(cuid())
+  shopId              String
+  productId           String
+  boughtWithProductId String
+  score               Float
+  lastUpdated         DateTime @default(now())
+
+  @@index([shopId, productId])
+  @@index([shopId, boughtWithProductId])
+}
+
+model PopularProduct {
+  id          String   @id @default(cuid())
+  shopId      String
+  productId   String
+  score       Float
+  lastUpdated DateTime @default(now())
+
+  @@index([shopId])
+  @@index([shopId, productId])
+}
+
+model ProductRecommendation {
+  id                   String   @id @default(cuid())
+  shopDomain           String
+  sourceProductId      String
+  recommendedProductId String
+  recommendationType   String
+  score                Float
+  lastCalculated       DateTime @default(now())
+
+  @@unique([sourceProductId, recommendedProductId, recommendationType])
+  @@index([shopDomain])
+}
