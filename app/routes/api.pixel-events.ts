@@ -245,10 +245,18 @@ export async function action({ request }: ActionFunctionArgs) {
     console.log(`[${timestamp}] ACTION: Pixel event stored: ${newEvent.id}, linked to PixelSession: ${pixelSession.id}`);
     
 
+    // Helper to convert numeric product IDs to Shopify GID format
+    function toShopifyGID(numericId: string | undefined | null): string | undefined {
+      if (!numericId) return undefined;
+      if (numericId.startsWith('gid://shopify/Product/')) return numericId;
+      return `gid://shopify/Product/${numericId}`;
+    }
+
     // --- Structured Table Ingestion ---
     // Product View (actual payload: data.productVariant.product.id)
     if (eventName === "product_viewed" && eventData?.productVariant?.product?.id) {
-      const productId = eventData.productVariant.product.id;
+      const productIdRaw = eventData.productVariant.product.id;
+      const productId = toShopifyGID(productIdRaw);
       const variantId = eventData.productVariant.id;
       const productMeta = await prisma.productMetadata.findUnique({
         where: { shopifyProductId: productId },
@@ -276,7 +284,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Cart Actions (template, update with real event sample if needed)
     if ((eventName === "product_added_to_cart" || eventName === "product_removed_from_cart") && eventData?.cartLine?.merchandise?.product?.id) {
-      const productId = eventData.cartLine.merchandise.product.id;
+      const productIdRaw = eventData.cartLine.merchandise.product.id;
+      const productId = toShopifyGID(productIdRaw);
       const variantId = eventData.cartLine.merchandise.id;
       const productMeta = await prisma.productMetadata.findUnique({
         where: { shopifyProductId: productId },
@@ -308,7 +317,8 @@ export async function action({ request }: ActionFunctionArgs) {
     if ((eventName === "checkout_started" || eventName === "checkout_completed") && eventData?.checkout?.lineItems) {
       const orderItemsToCreate = [];
       for (const item of eventData.checkout.lineItems) {
-        const productId = item.variant?.product?.id;
+        const productIdRaw = item.variant?.product?.id;
+        const productId = toShopifyGID(productIdRaw);
         const variantId = item.variant?.id;
         const productMeta = productId ? await prisma.productMetadata.findUnique({ where: { shopifyProductId: productId } }) : null;
         if (!productMeta) {
