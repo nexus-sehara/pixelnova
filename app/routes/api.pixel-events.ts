@@ -351,6 +351,23 @@ export async function action({ request }: ActionFunctionArgs) {
           }
         });
       }
+      // --- Backfill CartActions with checkoutToken and shopifyCustomerId ---
+      if (eventName === "checkout_completed" && checkoutToken && shopifyCustomerId) {
+        await prisma.cartAction.updateMany({
+          where: {
+            pixelSessionId: pixelSession.id,
+            OR: [
+              { checkoutToken: null },
+              { shopifyCustomerId: null }
+            ]
+          },
+          data: {
+            checkoutToken,
+            shopifyCustomerId
+          }
+        });
+        console.log(`[${timestamp}] Backfilled CartActions for session ${pixelSession.id} with checkoutToken and shopifyCustomerId`);
+      }
     }
     // --- End Structured Table Ingestion ---
 
