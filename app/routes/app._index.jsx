@@ -252,6 +252,38 @@ export default function Index() {
         </button>
       </TitleBar>
       <BlockStack gap="500">
+        {/* Onboarding: Product Sync Section */}
+        <Card sectioned>
+          <BlockStack gap="200">
+            <Text as="h2" variant="headingMd">
+              Step 1: Sync your Shopify products
+            </Text>
+            <Text as="p" variant="bodyMd">
+              To get started, sync your products from Shopify. This allows Pixelnova to track product views, carts, and orders accurately.<br/>
+              <strong>Estimated time:</strong> For most stores, syncing 5,000 products takes about 2–3 minutes. Larger stores may take longer. You can continue using Shopify while this runs.
+            </Text>
+            <Button
+              onClick={handleSyncProducts}
+              loading={isSyncingProducts}
+              disabled={isSyncingProducts}
+              variant="primary"
+              size="large"
+            >
+              {isSyncingProducts ? "Syncing Products..." : "Sync Products Now"}
+            </Button>
+            {syncStatusMessage && (
+              <Box padding="200"
+                   background={fetcher.data?.syncStatus === "error" ? "bg-surface-critical" : "bg-surface-success"}
+                   borderColor={fetcher.data?.syncStatus === "error" ? "border-critical" : "border-success"}
+                   borderWidth="025" borderRadius="200">
+                <Text as="p" variant="bodyMd" tone={fetcher.data?.syncStatus === "error" ? "critical" : "success"}>
+                  {syncStatusMessage}
+                </Text>
+              </Box>
+            )}
+          </BlockStack>
+        </Card>
+        {/* End Onboarding Section */}
         <Layout>
           <Layout.Section>
             <Card>
@@ -323,69 +355,12 @@ export default function Index() {
                   >
                     {pixelStatus === "ACTIVE" ? "Pixel Active" : "Activate Web Pixel"}
                   </Button>
-                  <Button
-                    onClick={handleSyncProducts}
-                    loading={isSyncingProducts}
-                    disabled={isSyncingProducts}
-                  >
-                    Sync Product Data
-                  </Button>
                 </InlineStack>
                 {pixelError && (
                   <Box color="critical" padding="200">{pixelError}</Box>
                 )}
                 {pixelSuccess && (
                   <Box color="success" padding="200">{pixelSuccess}</Box>
-                )}
-                {syncStatusMessage && (
-                  <Box padding="200"
-                       background={fetcher.data?.syncStatus === "error" ? "bg-surface-critical" : "bg-surface-success"}
-                       borderColor={fetcher.data?.syncStatus === "error" ? "border-critical" : "border-success"}
-                       borderWidth="025" borderRadius="200">
-                    <Text as="p" variant="bodyMd" tone={fetcher.data?.syncStatus === "error" ? "critical" : "success"}>
-                      {syncStatusMessage}
-                    </Text>
-                  </Box>
-                )}
-                {fetcher.data?.product && (
-                  <>
-                    <Text as="h3" variant="headingMd">
-                      {" "}
-                      productCreate mutation
-                    </Text>
-                    <Box
-                      padding="400"
-                      background="bg-surface-active"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor="border"
-                      overflowX="scroll"
-                    >
-                      <pre style={{ margin: 0 }}>
-                        <code>
-                          {JSON.stringify(fetcher.data.product, null, 2)}
-                        </code>
-                      </pre>
-                    </Box>
-                    <Text as="h3" variant="headingMd">
-                      {" "}
-                      productVariantsBulkUpdate mutation
-                    </Text>
-                    <Box
-                      padding="400"
-                      background="bg-surface-active"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor="border"
-                      overflowX="scroll"
-                    >
-                      <pre style={{ margin: 0 }}>
-                        <code>
-                          {JSON.stringify(fetcher.data.variant, null, 2)}
-                        </code>
-                      </pre>
-                    </Box>
-                  </>
                 )}
               </BlockStack>
             </Card>
