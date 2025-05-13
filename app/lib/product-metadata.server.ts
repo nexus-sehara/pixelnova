@@ -259,71 +259,101 @@ export async function upsertProductMetadata(
   }
 }
 
-// Fetch all products from Shopify using GraphQL pagination
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export async function fetchAllProductsFromShopify(admin: any): Promise<any[]> {
   let hasNextPage = true;
   let endCursor = null;
   const allProducts: any[] = [];
+  const MAX_RETRIES = 5;
 
   while (hasNextPage) {
-    const response: Response = await admin.graphql(
-      `
-      query getProducts($cursor: String) {
-        products(first: 100, after: $cursor) {
-          edges {
-            node {
-              id
-              title
-              handle
-              productType
-              vendor
-              tags
-              status
-              createdAt
-              updatedAt
-              featuredImage { url }
-              priceRangeV2 {
-                minVariantPrice { amount currencyCode }
-                maxVariantPrice { amount currencyCode }
-              }
-              variants(first: 10) {
-                edges {
-                  node {
-                    id
-                    title
-                    sku
-                    price
-                    inventoryQuantity
-                    image { url }
+    let response: Response | undefined;
+    let data: any;
+    let retries = 0;
+    while (true) {
+      try {
+        response = await admin.graphql(
+          `
+          query getProducts($cursor: String) {
+            products(first: 100, after: $cursor) {
+              edges {
+                node {
+                  id
+                  title
+                  handle
+                  productType
+                  vendor
+                  tags
+                  status
+                  createdAt
+                  updatedAt
+                  featuredImage { url }
+                  priceRangeV2 {
+                    minVariantPrice { amount currencyCode }
+                    maxVariantPrice { amount currencyCode }
+                  }
+                  variants(first: 10) {
+                    edges {
+                      node {
+                        id
+                        title
+                        sku
+                        price
+                        inventoryQuantity
+                        image { url }
+                      }
+                    }
+                  }
+                  collections(first: 10) {
+                    edges {
+                      node {
+                        id
+                        title
+                        handle
+                      }
+                    }
                   }
                 }
+                cursor
               }
-              collections(first: 10) {
-                edges {
-                  node {
-                    id
-                    title
-                    handle
-                  }
-                }
+              pageInfo {
+                hasNextPage
+                endCursor
               }
             }
-            cursor
           }
-          pageInfo {
-            hasNextPage
-            endCursor
+          `,
+          { variables: { cursor: endCursor } }
+        );
+        const statusCode = response ? response.status : undefined;
+        if (statusCode === 429) {
+          throw { isRateLimit: true };
+        }
+        data = await response.json();
+        break; // Success
+      } catch (err: any) {
+        const statusCode = response ? response.status : undefined;
+        if ((statusCode === 429) || err.isRateLimit) {
+          const wait = 1000 * Math.pow(2, retries); // Exponential backoff
+          console.warn(`[ProductMetadata] Rate limited by Shopify. Retrying in ${wait}ms... (attempt ${retries + 1})`);
+          await sleep(wait);
+          retries++;
+          if (retries > MAX_RETRIES) {
+            throw new Error('Exceeded max retries due to rate limiting');
           }
+        } else {
+          throw err;
         }
       }
-      `,
-      { variables: { cursor: endCursor } }
-    );
-    const data: any = await response.json();
+    }
     const edges = data.data.products.edges;
     allProducts.push(...edges.map((edge: any) => edge.node));
     hasNextPage = data.data.products.pageInfo.hasNextPage;
     endCursor = data.data.products.pageInfo.endCursor;
+    await sleep(250); // 250ms = 4 requests/sec (safe for most stores)
   }
 
   return allProducts;

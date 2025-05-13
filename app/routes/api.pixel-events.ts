@@ -246,21 +246,23 @@ export async function action({ request }: ActionFunctionArgs) {
     
 
     // --- Structured Table Ingestion ---
-    // Product View
-    if (eventName === "product_viewed" && eventData?.productId) {
+    // Product View (actual payload: data.productVariant.product.id)
+    if (eventName === "product_viewed" && eventData?.productVariant?.product?.id) {
+      const productId = eventData.productVariant.product.id;
+      const variantId = eventData.productVariant.id;
       const productMeta = await prisma.productMetadata.findUnique({
-        where: { shopifyProductId: eventData.productId },
+        where: { shopifyProductId: productId },
       });
       if (!productMeta) {
         console.warn(
-          `[${timestamp}] ProductView skipped: ProductMetadata not found for productId: ${eventData.productId}`
+          `[${timestamp}] ProductView skipped: ProductMetadata not found for productId: ${productId}`
         );
       } else {
         await prisma.productView.create({
           data: {
             shopId: shop.id,
-            productId: eventData.productId,
-            variantId: eventData.variantId ?? undefined,
+            productId,
+            variantId: variantId ?? undefined,
             viewedAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
             pixelSessionId: pixelSession.id,
             clientId: clientId ?? undefined,
@@ -272,9 +274,10 @@ export async function action({ request }: ActionFunctionArgs) {
       }
     }
 
-    // Cart Actions
-    if ((eventName === "product_added_to_cart" || eventName === "product_removed_from_cart") && eventData?.cartLine) {
-      const productId = eventData.cartLine?.merchandise?.product?.id ?? eventData.productId;
+    // Cart Actions (template, update with real event sample if needed)
+    if ((eventName === "product_added_to_cart" || eventName === "product_removed_from_cart") && eventData?.cartLine?.merchandise?.product?.id) {
+      const productId = eventData.cartLine.merchandise.product.id;
+      const variantId = eventData.cartLine.merchandise.id;
       const productMeta = await prisma.productMetadata.findUnique({
         where: { shopifyProductId: productId },
       });
@@ -287,9 +290,9 @@ export async function action({ request }: ActionFunctionArgs) {
           data: {
             shopId: shop.id,
             productId,
-            variantId: eventData.cartLine?.merchandise?.id ?? eventData.variantId,
+            variantId: variantId ?? undefined,
             actionType: eventName === "product_added_to_cart" ? "add" : "remove",
-            quantity: eventData.cartLine?.quantity ?? 1,
+            quantity: eventData.cartLine.quantity ?? 1,
             timestamp: eventTimestamp ? new Date(eventTimestamp) : new Date(),
             pixelSessionId: pixelSession.id,
             clientId: clientId ?? undefined,
@@ -301,43 +304,43 @@ export async function action({ request }: ActionFunctionArgs) {
       }
     }
 
-    // Order (checkout_completed)
-    if (eventName === "checkout_completed" && eventData?.checkout?.order) {
-      // Only create orderItems for which ProductMetadata exists
-      const orderItemsToCreate = (eventData.checkout.order.lineItems || []).filter((item: any) => !!item.product?.id)
-        .filter(async (item: any) => {
-          const meta = await prisma.productMetadata.findUnique({ where: { shopifyProductId: item.product.id } });
-          if (!meta) {
-            console.warn(
-              `[${timestamp}] OrderItem skipped: ProductMetadata not found for productId: ${item.product.id}`
-            );
-            return false;
-          }
-          return true;
-        });
-      // Await all filter promises
-      const filteredOrderItems = await Promise.all(orderItemsToCreate);
-      const validOrderItems = (eventData.checkout.order.lineItems || []).filter((item: any, idx: number) => filteredOrderItems[idx]);
-      const order = await prisma.order.create({
-        data: {
-          shopId: shop.id,
-          shopifyOrderId: eventData.checkout.order.id,
-          pixelSessionId: pixelSession.id,
-          clientId: clientId ?? undefined,
-          checkoutToken: checkoutToken ?? undefined,
-          shopifyCustomerId: shopifyCustomerId ?? undefined,
-          createdAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
-          eventId: newEvent.id,
-          orderItems: {
-            create: validOrderItems.map((item: any) => ({
-              productId: item.product?.id,
-              variantId: item.variantId ?? item.variant?.id,
-              quantity: item.quantity ?? 1,
-              price: item.price ?? 0,
-            }))
-          }
+    // Order (checkout_started/checkout_completed) - create OrderItems for each line item
+    if ((eventName === "checkout_started" || eventName === "checkout_completed") && eventData?.checkout?.lineItems) {
+      const orderItemsToCreate = [];
+      for (const item of eventData.checkout.lineItems) {
+        const productId = item.variant?.product?.id;
+        const variantId = item.variant?.id;
+        const productMeta = productId ? await prisma.productMetadata.findUnique({ where: { shopifyProductId: productId } }) : null;
+        if (!productMeta) {
+          console.warn(
+            `[${timestamp}] OrderItem skipped: ProductMetadata not found for productId: ${productId}`
+          );
+          continue;
         }
-      });
+        orderItemsToCreate.push({
+          productId,
+          variantId: variantId ?? undefined,
+          quantity: item.quantity ?? 1,
+          price: item.finalLinePrice?.amount ?? 0,
+        });
+      }
+      if (orderItemsToCreate.length > 0) {
+        await prisma.order.create({
+          data: {
+            shopId: shop.id,
+            shopifyOrderId: eventData.checkout.order?.id ?? undefined,
+            pixelSessionId: pixelSession.id,
+            clientId: clientId ?? undefined,
+            checkoutToken: checkoutToken ?? undefined,
+            shopifyCustomerId: shopifyCustomerId ?? undefined,
+            createdAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+            eventId: newEvent.id,
+            orderItems: {
+              create: orderItemsToCreate
+            }
+          }
+        });
+      }
     }
     // --- End Structured Table Ingestion ---
 
