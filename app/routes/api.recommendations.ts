@@ -137,16 +137,16 @@ export async function action({ request }: ActionFunctionArgs) {
     const coViewedIds = coViewed.map(c => c.coViewedProductId);
     const metas = await prisma.productMetadata.findMany({
       where: { shopifyProductId: { in: coViewedIds } },
-      select: { shopifyProductId: true, title: true, image: true, url: true },
+      select: { shopifyProductId: true, title: true, featuredImageUrl: true, handle: true },
     });
-    const metaMap = new Map(metas.map((m: { shopifyProductId: string; title?: string; image?: string; url?: string }) => [m.shopifyProductId, m]));
-    const recommendations: Recommendation[] = coViewed.map((c, idx) => {
-      const meta = metaMap.get(c.coViewedProductId) as { shopifyProductId: string; title?: string; image?: string; url?: string } | undefined;
+    const metaMap = new Map(metas.map((m: { shopifyProductId: string; title?: string; featuredImageUrl?: string; handle?: string }) => [m.shopifyProductId, m]));
+    const recommendations: Recommendation[] = coViewed.map((c: { coViewedProductId: string; score: number }, idx: number) => {
+      const meta = metaMap.get(c.coViewedProductId) as { shopifyProductId: string; title?: string; featuredImageUrl?: string; handle?: string } | undefined;
       return {
         productId: c.coViewedProductId,
         title: meta?.title || "Product",
-        image: meta?.image || "",
-        url: meta?.url || "",
+        image: meta?.featuredImageUrl || "",
+        url: meta?.handle ? `/products/${meta.handle}` : "",
         score: c.score,
         reason: "Others also viewed this product"
       };
