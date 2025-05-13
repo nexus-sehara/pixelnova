@@ -259,49 +259,85 @@ export async function upsertProductMetadata(
   }
 }
 
-/**
- * Main function to orchestrate the fetching and storing of product metadata.
- * To be called from a Remix action or a scheduled job.
- */
-export async function syncAllProductMetadata(admin: any, shopId: string, shopDomain: string) { // Pass authenticated admin and shopId
-  console.log(`[ProductMetadata] Starting sync for shopId: ${shopId} (${shopDomain})`);
-  
-  // 1. Get distinct product GIDs from PixelEvents that are not yet in ProductMetadata or haven't been fetched recently.
-  // This needs more sophisticated logic: find GIDs in PixelEvents, then check against ProductMetadata.
-  const productGidsToFetch = await getDistinctProductGidsFromEvents(shopId); // Pass shopId
+// Fetch all products from Shopify using GraphQL pagination
+export async function fetchAllProductsFromShopify(admin: any): Promise<any[]> {
+  let hasNextPage = true;
+  let endCursor = null;
+  const allProducts: any[] = [];
 
-  const existingMetadata = await prisma.productMetadata.findMany({
-    where: { shopId: shopId, shopifyProductId: { in: productGidsToFetch } },
-    select: { shopifyProductId: true, lastFetchedAt: true },
-  });
-
-  // Define the type for meta based on the select clause
-  type ExistingMeta = {
-    shopifyProductId: string;
-    lastFetchedAt: Date | null;
-  };
-
-  const gidsAlreadyFetchedRecently = new Set(
-    existingMetadata
-      .filter((meta: ExistingMeta) => meta.lastFetchedAt && (new Date().getTime() - meta.lastFetchedAt.getTime()) < (24 * 60 * 60 * 1000)) // e.g., skip if fetched in last 24h
-      .map((meta: ExistingMeta) => meta.shopifyProductId)
-  );
-
-  const finalGidsToProcess = productGidsToFetch.filter(gid => !gidsAlreadyFetchedRecently.has(gid));
-  console.log(`[ProductMetadata] Found ${productGidsToFetch.length} distinct GIDs from events. After filtering recently fetched, ${finalGidsToProcess.length} GIDs to process.`);
-
-  for (const gid of finalGidsToProcess) {
-    if (!gid.startsWith('gid://shopify/Product/')) {
-        console.warn(`[ProductMetadata] Skipping invalid or non-product GID: ${gid}`);
-        continue;
-    }
-    console.log(`[ProductMetadata] Attempting to fetch product details for GID: ${gid}`);
-    const productData = await fetchProductDetailsFromShopify(admin, gid);
-    if (productData) {
-      await upsertProductMetadata(shopId, productData);
-    } else {
-      console.warn(`[ProductMetadata] No product data returned from Shopify for GID: ${gid}`);
-    }
+  while (hasNextPage) {
+    const response: Response = await admin.graphql(
+      `
+      query getProducts($cursor: String) {
+        products(first: 100, after: $cursor) {
+          edges {
+            node {
+              id
+              title
+              handle
+              productType
+              vendor
+              tags
+              status
+              createdAt
+              updatedAt
+              featuredImage { url }
+              priceRangeV2 {
+                minVariantPrice { amount currencyCode }
+                maxVariantPrice { amount currencyCode }
+              }
+              variants(first: 10) {
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    inventoryQuantity
+                    image { url }
+                  }
+                }
+              }
+              collections(first: 10) {
+                edges {
+                  node {
+                    id
+                    title
+                    handle
+                  }
+                }
+              }
+            }
+            cursor
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+      `,
+      { variables: { cursor: endCursor } }
+    );
+    const data: any = await response.json();
+    const edges = data.data.products.edges;
+    allProducts.push(...edges.map((edge: any) => edge.node));
+    hasNextPage = data.data.products.pageInfo.hasNextPage;
+    endCursor = data.data.products.pageInfo.endCursor;
   }
-  console.log(`[ProductMetadata] Finished sync for shop: ${shopDomain}`);
+
+  return allProducts;
+}
+
+// Replace syncAllProductMetadata with a full catalog sync
+export async function syncAllProductMetadata(admin: any, shopId: string, shopDomain: string) {
+  console.log(`[ProductMetadata] Starting FULL catalog sync for shopId: ${shopId} (${shopDomain})`);
+
+  const allProducts = await fetchAllProductsFromShopify(admin);
+
+  for (const product of allProducts) {
+    await upsertProductMetadata(shopId, product);
+  }
+
+  console.log(`[ProductMetadata] Finished FULL catalog sync for shop: ${shopDomain}. Synced ${allProducts.length} products.`);
 } 
