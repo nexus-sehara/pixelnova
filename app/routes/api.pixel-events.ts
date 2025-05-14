@@ -50,21 +50,22 @@ function setCorsHeaders(responseHeaders: Headers, requestOrigin: string | null) 
         break;
       }
     }
-  } else {
-    console.log(`[${new Date().toISOString()}] CORS: No Origin header present in the request. ACAO not set.`);
   }
+
+  // Always set Vary: Origin for cache correctness
+  responseHeaders.set("Vary", "Origin");
 
   if (originAllowed && requestOrigin) {
     responseHeaders.set("Access-Control-Allow-Origin", requestOrigin);
-    console.log(`[${new Date().toISOString()}] CORS: Origin '${requestOrigin}' IS ALLOWED (matched ${matchedPattern}). Set ACAO to: '${requestOrigin}'`);
     responseHeaders.set("Access-Control-Allow-Credentials", "true");
+    console.log(`[CORS] Allowed: ${requestOrigin} (matched ${matchedPattern})`);
   } else if (requestOrigin) {
-    console.warn(`[${new Date().toISOString()}] CORS: Origin '${requestOrigin}' IS NOT ALLOWED. getAllowedOrigins() list: [${allowedOriginsPatterns.join(", ")}]. ACAO was NOT set.`);
+    console.warn(`[CORS] Blocked: ${requestOrigin} (no match)`);
   }
-  // These headers are generally set for CORS responses, even if origin is not specifically allowed (browser will then block)
+
   responseHeaders.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Origin, Accept, X-Shopify-Hmac-Sha256");
-  responseHeaders.set("Access-Control-Max-Age", "86400"); // 24 hours
+  responseHeaders.set("Access-Control-Max-Age", "86400");
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
