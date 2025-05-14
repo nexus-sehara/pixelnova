@@ -200,13 +200,14 @@ model Order {
   id                String        @id @default(cuid())
   shopId            String
   shop              Shop          @relation(fields: [shopId], references: [id])
-  shopifyOrderId    String
+  shopifyOrderId    String?
   pixelSessionId    String?
   pixelSession      PixelSession? @relation(fields: [pixelSessionId], references: [id])
   clientId          String
   checkoutToken     String?
   shopifyCustomerId String?
   createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @default(now()) @updatedAt
   eventId           String?
   pixelEvent        PixelEvent?   @relation(fields: [eventId], references: [id])
   orderItems        OrderItem[]
