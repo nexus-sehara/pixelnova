@@ -249,28 +249,100 @@ export async function action({ request }: ActionFunctionArgs) {
     // Helper to convert numeric product IDs to Shopify GID format
     function toShopifyGID(numericId: string | undefined | null): string | undefined {
       if (!numericId) return undefined;
-      if (numericId.startsWith('gid://shopify/Product/')) return numericId;
-      return `gid://shopify/Product/${numericId}`;
+      // Ensure it's a string before calling startsWith
+      const idStr = String(numericId);
+      if (idStr.startsWith('gid://shopify/Product/')) return idStr;
+      return `gid://shopify/Product/${idStr}`;
     }
 
     // --- Unified productId extraction for product_viewed events ---
-    let productId: string | undefined = undefined;
+    let rawProductId: string | undefined = undefined;
     if (eventName === 'product_viewed') {
-      productId = eventData?.productId || eventData?.productVariant?.product?.id;
+      rawProductId = eventData?.productId || eventData?.productVariant?.product?.id;
     }
+    const finalProductId = toShopifyGID(rawProductId); // Convert to GID format
 
     // --- Structured Table Ingestion ---
     // ProductView
-    if (eventName === "product_viewed" && productId) {
-      await prisma.productView.create({
-        data: {
-          pixelSessionId: pixelSession?.id,
-          shopId: shop.id,
-          productId,
-          viewedAt: new Date(), // Corrected from timestamp to viewedAt
-          clientId: clientId ?? null, // Ensure clientId is always passed, even if null
-        },
+    if (eventName === "product_viewed" && finalProductId) {
+      // Check if ProductMetadata exists for this finalProductId
+      const productMeta = await prisma.productMetadata.findUnique({
+        where: { shopifyProductId: finalProductId },
+        select: { shopifyProductId: true } // Select minimal data
       });
+
+      if (!productMeta) {
+        console.warn(`[${timestamp}] ProductView & Aggregates SKIPPED: ProductMetadata not found for productId: ${finalProductId}. EventID: ${eventId}`);
+      } else {
+        await prisma.productView.create({
+          data: {
+            pixelSessionId: pixelSession?.id,
+            shopId: shop.id,
+            productId: finalProductId, // Use the GID formatted ID
+            viewedAt: new Date(), 
+            clientId: clientId ?? null, 
+          },
+        });
+        console.log(`[${timestamp}] ACTION: ProductView created for ${finalProductId}. EventID: ${eventId}`);
+
+        // --- Real-time aggregate updates for recommendations (only if ProductView was created) ---
+        // This logic now uses finalProductId which is in GID format.
+        const pixelSessionId = pixelSession?.id; // Already defined above
+        const shopId = shop.id; // Already defined above
+
+        // 1. Update ProductCooccurrence (co-views in the same session)
+        if (pixelSessionId) {
+          const otherViews = await prisma.productView.findMany({
+            where: {
+              pixelSessionId,
+              productId: { not: finalProductId }
+            },
+            select: { productId: true }
+          });
+          for (const other of otherViews) {
+            await prisma.productCooccurrence.upsert({
+              where: {
+                shopId_productId_coViewedProductId: {
+                  shopId,
+                  productId: finalProductId,
+                  coViewedProductId: other.productId // Assuming other.productId is already GID
+                }
+              },
+              update: { score: { increment: 1 } },
+              create: {
+                shopId,
+                productId: finalProductId,
+                coViewedProductId: other.productId,
+                score: 1
+              }
+            });
+            await prisma.productCooccurrence.upsert({
+              where: {
+                shopId_productId_coViewedProductId: {
+                  shopId,
+                  productId: other.productId,
+                  coViewedProductId: finalProductId
+                }
+              },
+              update: { score: { increment: 1 } },
+              create: {
+                shopId,
+                productId: other.productId,
+                coViewedProductId: finalProductId,
+                score: 1
+              }
+            });
+          }
+        }
+
+        // 2. Update PopularProduct (increment view count)
+        await prisma.popularProduct.upsert({
+          where: { shopId_productId: { shopId, productId: finalProductId } },
+          update: { score: { increment: 1 } },
+          create: { shopId, productId: finalProductId, score: 1 }
+        });
+        console.log(`[${timestamp}] ACTION: Aggregates updated for ${finalProductId}. EventID: ${eventId}`);
+      }
     }
 
     // Cart Actions (template, update with real event sample if needed)
@@ -361,68 +433,6 @@ export async function action({ request }: ActionFunctionArgs) {
       }
     }
     // --- End Structured Table Ingestion ---
-
-    // After upserting PixelSession and before returning response, handle event-specific logic
-    // --- Real-time aggregate updates for recommendations ---
-    if (eventName === 'product_viewed' && productId && shop.id) {
-      const pixelSessionId = pixelSession?.id;
-      const shopId = shop.id;
-
-      // 1. Update ProductCooccurrence (co-views in the same session)
-      if (pixelSessionId) {
-        // Fetch all other products viewed in this session (excluding current)
-        const otherViews = await prisma.productView.findMany({
-          where: {
-            pixelSessionId,
-            productId: { not: productId }
-          },
-          select: { productId: true }
-        });
-        for (const other of otherViews) {
-          // Update co-occurrence for (productId, other.productId)
-          await prisma.productCooccurrence.upsert({
-            where: {
-              shopId_productId_coViewedProductId: {
-                shopId,
-                productId,
-                coViewedProductId: other.productId
-              }
-            },
-            update: { score: { increment: 1 } },
-            create: {
-              shopId,
-              productId,
-              coViewedProductId: other.productId,
-              score: 1
-            }
-          });
-          // Also update the reverse direction
-          await prisma.productCooccurrence.upsert({
-            where: {
-              shopId_productId_coViewedProductId: {
-                shopId,
-                productId: other.productId,
-                coViewedProductId: productId
-              }
-            },
-            update: { score: { increment: 1 } },
-            create: {
-              shopId,
-              productId: other.productId,
-              coViewedProductId: productId,
-              score: 1
-            }
-          });
-        }
-      }
-
-      // 2. Update PopularProduct (increment view count)
-      await prisma.popularProduct.upsert({
-        where: { shopId_productId: { shopId, productId } },
-        update: { score: { increment: 1 } },
-        create: { shopId, productId, score: 1 }
-      });
-    }
 
     // Re-affirm ACAO header for the actual POST response
     if (requestOrigin && responseHeaders.has("Access-Control-Allow-Origin")) {
