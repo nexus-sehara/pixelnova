@@ -19,6 +19,7 @@ export const action = async ({ request }) => {
   } else {
     shops = await prisma.shop.findMany({ select: { id: true, domain: true } });
   }
+  
 
   let results = [];
   for (const shop of shops) {
