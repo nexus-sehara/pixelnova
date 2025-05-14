@@ -15,14 +15,14 @@ const ITEMS = [
     },
     complete: false,
     primaryButton: {
-      content: "Add product",
+      content: "Synchronise products",
       props: {
         url: "https://www.example.com",
         external: true,
       },
     },
     secondaryButton: {
-      content: "Import products",
+      content: "Synchronise discounts",
       props: {
         url: "https://www.example.com",
         external: true,
