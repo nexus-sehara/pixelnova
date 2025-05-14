@@ -252,34 +252,23 @@ export async function action({ request }: ActionFunctionArgs) {
       return `gid://shopify/Product/${numericId}`;
     }
 
+    // --- Unified productId extraction for product_viewed events ---
+    let productId: string | undefined = undefined;
+    if (eventName === 'product_viewed') {
+      productId = eventData?.productId || eventData?.productVariant?.product?.id;
+    }
+
     // --- Structured Table Ingestion ---
-    // Product View (actual payload: data.productVariant.product.id)
-    if (eventName === "product_viewed" && eventData?.productVariant?.product?.id) {
-      const productIdRaw = eventData.productVariant.product.id;
-      const productId = toShopifyGID(productIdRaw);
-      const variantId = eventData.productVariant.id;
-      const productMeta = await prisma.productMetadata.findUnique({
-        where: { shopifyProductId: productId },
+    // ProductView
+    if (eventName === "product_viewed" && productId) {
+      await prisma.productView.create({
+        data: {
+          pixelSessionId: pixelSession?.id,
+          shopId: shop.id,
+          productId,
+          timestamp: new Date(),
+        },
       });
-      if (!productMeta) {
-        console.warn(
-          `[${timestamp}] ProductView skipped: ProductMetadata not found for productId: ${productId}`
-        );
-      } else {
-        await prisma.productView.create({
-          data: {
-            shopId: shop.id,
-            productId,
-            variantId: variantId ?? undefined,
-            viewedAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
-            pixelSessionId: pixelSession.id,
-            clientId: clientId ?? undefined,
-            checkoutToken: checkoutToken ?? undefined,
-            shopifyCustomerId: shopifyCustomerId ?? undefined,
-            eventId: newEvent.id,
-          }
-        });
-      }
     }
 
     // Cart Actions (template, update with real event sample if needed)
@@ -373,8 +362,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // After upserting PixelSession and before returning response, handle event-specific logic
     // --- Real-time aggregate updates for recommendations ---
-    if (eventName === 'product_viewed' && eventData?.productId && shop.id) {
-      const productId = eventData.productId;
+    if (eventName === 'product_viewed' && productId && shop.id) {
       const pixelSessionId = pixelSession?.id;
       const shopId = shop.id;
 
