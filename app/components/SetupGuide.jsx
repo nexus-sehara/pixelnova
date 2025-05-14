@@ -1,5 +1,3 @@
-import { useState } from "react";
-import { Button } from "@shopify/polaris";
 
 // EXAMPLE DATA - COMPONENT API
 const ITEMS = [

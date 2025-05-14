@@ -267,7 +267,8 @@ export async function action({ request }: ActionFunctionArgs) {
           pixelSessionId: pixelSession?.id,
           shopId: shop.id,
           productId,
-          timestamp: new Date(),
+          viewedAt: new Date(), // Corrected from timestamp to viewedAt
+          clientId: clientId ?? null, // Ensure clientId is always passed, even if null
         },
       });
     }
