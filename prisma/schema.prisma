@@ -281,7 +281,7 @@ model PopularProduct {
   lastUpdated DateTime @default(now())
 
   @@index([shopId])
-  @@index([shopId, productId])
+  @@unique([shopId, productId])
 }
 
 model ProductRecommendation {
