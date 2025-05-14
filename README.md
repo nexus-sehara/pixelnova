@@ -1,3 +1,81 @@
+What’s implemented so far (by code and by plan)
+What’s left to do (by phase and by code)
+Potential issues or risks
+Suggestions for improvements and next steps
+1. Project Structure Overview
+Top-level (pixelnova/)
+README.md, roadmap.md, roadmap-proposal*.md: Documentation and planning.
+app/: Main Remix app code (routes, lib, db, components).
+prisma/: Database schema and migrations.
+phases/: (Likely) phase-specific documentation or plans.
+scripts/: Utility scripts (currently empty after cleanup).
+lib/, extensions/, public/, etc.: Standard for Shopify/Remix apps.
+app/ Directory
+routes/: All Remix routes (API endpoints, admin UI, etc.).
+lib/: Server-side logic (product metadata, event processing, etc.).
+db.server.ts: Prisma client and DB connection.
+shopify.server.js: Shopify app config and helpers.
+components/: React components for UI.
+2. What’s Implemented (Code & Plan)
+Event Ingestion & Session Tracking
+app/routes/api.pixel-events.ts: Receives and stores pixel events from Shopify.
+Handles CORS, stores raw event data, associates with shop and session.
+PixelSession model: Now includes clientId (for anonymous session tracking).
+Shop & Event Models
+Shop model: Stores shop domain, associates with events/sessions.
+PixelEvent model: Stores raw event data, event type, timestamp, shopId, etc.
+PixelSession model: Tracks sessionToken, clientId, and (in progress) richer identifiers.
+Product Metadata Sync
+app/lib/product-metadata.server.ts: Logic for extracting product GIDs, fetching product details from Shopify, and upserting into ProductMetadata.
+Manual sync: Admin UI button triggers sync for a shop.
+API sync: Secure endpoint (api.admin.sync-products.ts) for scheduled/manual sync.
+Admin UI
+UI for triggering product metadata sync.
+(Planned) UI for viewing product metadata, event logs, and sync status.
+Security
+CORS restrictions for event ingestion.
+API sync endpoint protected by SYNC_SECRET.
+Per-shop data isolation.
+Documentation
+Roadmap and phase files exist.
+README includes setup, sync instructions, and security notes.
+3. What’s Left To Do (By Phase & Code)
+Phase 1: Finalize Session Tracking
+Deploy and validate: Ensure clientId is correctly populated in PixelSession.
+Analyze: Check if session grouping is improved.
+Phase 2: Richer Identifiers & User Journey
+Enhance session/user identification: Add checkoutToken, shopifyCustomerId to PixelSession or introduce UserJourney model.
+Update event processing: Extract and use the richest identifier.
+Schema changes: Update prisma/schema.prisma, run migrations.
+Test: Simulate user flows, validate data stitching.
+Phase 3: Structured Product & Behavior Data
+Implement structured tables: ProductView, CartAction, Order, OrderItem.
+Backfill data: Optionally process existing events to populate new tables.
+Test queries: For recommendation scenarios.
+Phase 4: Recommendations & User Profiles
+Implement algorithms: Start with simple co-occurrence and popularity-based recommendations.
+Build user profiles: Aggregate product views and purchases.
+Expose recommendations via API.
+Phase 5: Advanced Features
+Personalization, A/B testing, advanced algorithms.
+Performance optimization, scaling, monitoring.
+4. Potential Issues & Risks
+ESM/CJS/TypeScript compatibility: Avoid direct script execution; use API endpoints for background jobs.
+Data privacy: Ensure compliance with Shopify, GDPR, CCPA.
+Session stitching: Complexity increases as you add more identifiers (clientId, checkoutToken, customerId).
+Backfilling data: Can be resource-intensive; plan for batch processing.
+API endpoint security: SYNC_SECRET is good, but consider IP whitelisting or OAuth for even stronger protection.
+Schema evolution: As you add more structured tables, keep migrations and data backfills well-documented and tested.
+5. Improvements & Suggestions
+Formalize the roadmap: Move the phased plan into roadmap.md or a new phases/ markdown file for team visibility.
+Automated tests: Add unit/integration tests for event processing and sync logic.
+Monitoring/logging: Add logging for API endpoints and background jobs.
+Admin UI: Expand to show sync status, logs, and product metadata.
+Documentation: Keep schema and data flow docs up to date as you iterate.
+Scheduling: Set up Render Scheduler or GitHub Actions to hit your sync endpoint regularly.
+Data validation: Add checks to ensure event data is well-formed before processing.
+
+
 # Shopify App Template - Remix
 
 
