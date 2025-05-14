@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Button } from "@shopify/polaris";
-import { SetupGuide } from "./SetupGuide";
 
 // EXAMPLE DATA - COMPONENT API
 const ITEMS = [

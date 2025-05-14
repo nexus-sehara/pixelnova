@@ -1,4 +1,3 @@
-
 import { TitleBar } from "@shopify/app-bridge-react";
 import { useState } from "react";
 import { Button } from "@shopify/polaris";
