@@ -371,6 +371,69 @@ export async function action({ request }: ActionFunctionArgs) {
     }
     // --- End Structured Table Ingestion ---
 
+    // After upserting PixelSession and before returning response, handle event-specific logic
+    // --- Real-time aggregate updates for recommendations ---
+    if (eventName === 'product_viewed' && eventData?.productId && shop.id) {
+      const productId = eventData.productId;
+      const pixelSessionId = pixelSession?.id;
+      const shopId = shop.id;
+
+      // 1. Update ProductCooccurrence (co-views in the same session)
+      if (pixelSessionId) {
+        // Fetch all other products viewed in this session (excluding current)
+        const otherViews = await prisma.productView.findMany({
+          where: {
+            pixelSessionId,
+            productId: { not: productId }
+          },
+          select: { productId: true }
+        });
+        for (const other of otherViews) {
+          // Update co-occurrence for (productId, other.productId)
+          await prisma.productCooccurrence.upsert({
+            where: {
+              shopId_productId_coViewedProductId: {
+                shopId,
+                productId,
+                coViewedProductId: other.productId
+              }
+            },
+            update: { score: { increment: 1 } },
+            create: {
+              shopId,
+              productId,
+              coViewedProductId: other.productId,
+              score: 1
+            }
+          });
+          // Also update the reverse direction
+          await prisma.productCooccurrence.upsert({
+            where: {
+              shopId_productId_coViewedProductId: {
+                shopId,
+                productId: other.productId,
+                coViewedProductId: productId
+              }
+            },
+            update: { score: { increment: 1 } },
+            create: {
+              shopId,
+              productId: other.productId,
+              coViewedProductId: productId,
+              score: 1
+            }
+          });
+        }
+      }
+
+      // 2. Update PopularProduct (increment view count)
+      await prisma.popularProduct.upsert({
+        where: { shopId_productId: { shopId, productId } },
+        update: { score: { increment: 1 } },
+        create: { shopId, productId, score: 1 }
+      });
+    }
+
     // Re-affirm ACAO header for the actual POST response
     if (requestOrigin && responseHeaders.has("Access-Control-Allow-Origin")) {
         // This check ensures we only re-affirm if it was allowed and set by setCorsHeaders initially
