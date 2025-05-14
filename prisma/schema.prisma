@@ -204,7 +204,7 @@ model Order {
   pixelSessionId    String?
   pixelSession      PixelSession? @relation(fields: [pixelSessionId], references: [id])
   clientId          String
-  checkoutToken     String?
+  checkoutToken     String?       @unique // Made unique for upsert
   shopifyCustomerId String?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @default(now()) @updatedAt
@@ -215,7 +215,6 @@ model Order {
   @@index([shopId])
   @@index([shopifyOrderId])
   @@index([clientId])
-  @@index([checkoutToken])
   @@index([shopifyCustomerId])
 }
 
@@ -270,8 +269,7 @@ model FrequentlyBoughtTogether {
   score               Float
   lastUpdated         DateTime @default(now())
 
-  @@index([shopId, productId])
-  @@index([shopId, boughtWithProductId])
+  @@unique([shopId, productId, boughtWithProductId])
 }
 
 model PopularProduct {

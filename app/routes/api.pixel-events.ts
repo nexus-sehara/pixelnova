@@ -378,44 +378,99 @@ export async function action({ request }: ActionFunctionArgs) {
 
     // Order (checkout_started/checkout_completed) - create OrderItems for each line item
     if ((eventName === "checkout_started" || eventName === "checkout_completed") && eventData?.checkout?.lineItems) {
-      const orderItemsToCreate = [];
+      const currentCheckoutToken = checkoutToken; 
+      const orderShopifyId = eventData.checkout.order?.id; 
+      const orderShopifyCustomerId = eventData.checkout.order?.customer?.id; 
+
+      const orderItemsDataForCreate: Prisma.OrderItemUncheckedCreateWithoutOrderInput[] = []; // Use UncheckedCreateWithoutOrderInput
       for (const item of eventData.checkout.lineItems) {
-        const productIdRaw = item.variant?.product?.id;
-        const productId = toShopifyGID(productIdRaw);
-        const variantId = item.variant?.id;
-        const productMeta = productId ? await prisma.productMetadata.findUnique({ where: { shopifyProductId: productId } }) : null;
+        const itemProductIdRaw = item.variant?.product?.id;
+        const itemProductId = toShopifyGID(itemProductIdRaw);
+        const itemVariantId = item.variant?.id;
+        const productMeta = itemProductId ? await prisma.productMetadata.findUnique({ where: { shopifyProductId: itemProductId }, select: { shopifyProductId: true } }) : null;
         if (!productMeta) {
-          console.warn(
-            `[${timestamp}] OrderItem skipped: ProductMetadata not found for productId: ${productId}`
-          );
-          continue;
+          console.warn(`[${timestamp}] OrderItem SKIPPED: ProductMetadata not found for productId: ${itemProductId}. CKToken: ${currentCheckoutToken}, EventID: ${newEvent.id}`);
+          continue; 
         }
-        orderItemsToCreate.push({
-          productId,
-          variantId: variantId ?? undefined,
+        // For UncheckedCreateWithoutOrderInput, we provide the scalar foreign key `productId` directly
+        orderItemsDataForCreate.push({
+          productId: itemProductId!, 
+          variantId: itemVariantId ?? undefined,
           quantity: item.quantity ?? 1,
           price: item.finalLinePrice?.amount ?? 0,
         });
       }
-      if (orderItemsToCreate.length > 0) {
-        await prisma.order.create({
-          data: {
+
+      if (orderItemsDataForCreate.length > 0) {
+        if (currentCheckoutToken) {
+          // Data for the UPDATE part of the upsert
+          const orderUpdatePayload = {
+            shopId: shop.id, // Should not change
+            pixelSessionId: pixelSession.id, // Potentially could change if session merges, but usually stable for a checkout
+            clientId: clientId ?? undefined,
+            shopifyCustomerId: orderShopifyCustomerId ?? undefined,
+            eventId: newEvent.id, // Link to the current event causing the update
+            shopifyOrderId: orderShopifyId ?? undefined, 
+            // We generally DO NOT re-process orderItems on update. They are created with the initial checkout_started.
+            // If items could truly change mid-checkout with the same token, a more complex item upsert logic would be needed.
+            // For now, assume items are set on initial creation.
+          };
+
+          // Data for the CREATE part of the upsert (includes items)
+          const orderCreatePayload = {
+            checkoutToken: currentCheckoutToken, // Set on create
+            createdAt: eventTimestamp ? new Date(eventTimestamp) : new Date(), // Set on create
             shopId: shop.id,
-            shopifyOrderId: eventData.checkout.order?.id ?? undefined,
             pixelSessionId: pixelSession.id,
             clientId: clientId ?? undefined,
-            checkoutToken: checkoutToken ?? undefined,
-            shopifyCustomerId: shopifyCustomerId ?? undefined,
-            createdAt: eventTimestamp ? new Date(eventTimestamp) : new Date(),
+            shopifyCustomerId: orderShopifyCustomerId ?? undefined, // May be null on checkout_started
             eventId: newEvent.id,
+            shopifyOrderId: orderShopifyId ?? undefined, // May be null on checkout_started
             orderItems: {
-              create: orderItemsToCreate
+              create: orderItemsDataForCreate,
+            },
+          };
+
+          const upsertedOrder = await prisma.order.upsert({
+            where: { checkoutToken: currentCheckoutToken }, 
+            update: orderUpdatePayload, 
+            create: orderCreatePayload,
+          });
+          console.log(`[${timestamp}] ACTION: Order upserted (CKToken: ${currentCheckoutToken}): ${upsertedOrder.id}. Event: ${eventName}. ShopifyOID: ${orderShopifyId || 'N/A'}`);
+
+          // --- Real-time FrequentlyBoughtTogether updates (only on checkout_completed and if order items were processed) ---
+          if (eventName === "checkout_completed" && orderShopifyId && upsertedOrder && orderItemsDataForCreate.length >= 2) {
+            console.log(`[${timestamp}] FBT: Processing for Order ID ${upsertedOrder.id}, Shopify OID ${orderShopifyId}`);
+            const productIdsInOrder = orderItemsDataForCreate.map(item => item.productId!);
+            for (let i = 0; i < productIdsInOrder.length; i++) {
+              for (let j = i + 1; j < productIdsInOrder.length; j++) {
+                const prodIdA = productIdsInOrder[i];
+                const prodIdB = productIdsInOrder[j];
+
+                // Upsert for A -> B
+                await prisma.frequentlyBoughtTogether.upsert({
+                  where: { shopId_productId_boughtWithProductId: { shopId: shop.id, productId: prodIdA, boughtWithProductId: prodIdB } },                  
+                  update: { score: { increment: 1 }, lastUpdated: new Date() },
+                  create: { shopId: shop.id, productId: prodIdA, boughtWithProductId: prodIdB, score: 1 }
+                });
+                // Upsert for B -> A
+                await prisma.frequentlyBoughtTogether.upsert({
+                  where: { shopId_productId_boughtWithProductId: { shopId: shop.id, productId: prodIdB, boughtWithProductId: prodIdA } },
+                  update: { score: { increment: 1 }, lastUpdated: new Date() },
+                  create: { shopId: shop.id, productId: prodIdB, boughtWithProductId: prodIdA, score: 1 }
+                });
+              }
             }
+            console.log(`[${timestamp}] FBT: Updated for ${productIdsInOrder.length} items in Order ID ${upsertedOrder.id}.`);
           }
-        });
+        } else {
+            console.warn(`[${timestamp}] Order SKIPPED: checkoutToken is missing from event. EventName: ${eventName}, EventID: ${newEvent.id}`);
+        }
       }
+
       // --- Backfill CartActions with checkoutToken and shopifyCustomerId ---
-      if (eventName === "checkout_completed" && checkoutToken && shopifyCustomerId) {
+      // This logic remains, useful if cart actions happened before checkoutToken was set on PixelSession
+      if (eventName === "checkout_completed" && checkoutToken && orderShopifyCustomerId) {
         await prisma.cartAction.updateMany({
           where: {
             pixelSessionId: pixelSession.id,
