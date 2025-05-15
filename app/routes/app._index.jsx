@@ -19,7 +19,63 @@ import prisma from "../db.server";
 import { syncAllProductMetadata } from "../lib/product-metadata.server.ts";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
+
+  try {
+    const webPixelSettings = {
+      settings: {
+        accountID: "PIXELNOVA_APP_ACCOUNT_V1",
+      },
+    };
+
+    console.log(`[Loader] Attempting to create web pixel for shop: ${session.shop} with settings:`, webPixelSettings);
+
+    const mutationResponse = await admin.graphql(
+      `#graphql
+        mutation webPixelCreate($webPixel: WebPixelInput!) {
+          webPixelCreate(webPixel: $webPixel) {
+            userErrors {
+              field
+              message
+            }
+            webPixel {
+              settings
+              id
+            }
+          }
+        }
+      `,
+      {
+        variables: {
+          webPixel: webPixelSettings,
+        },
+      }
+    );
+
+    if (!mutationResponse.ok) {
+      const errorBody = await mutationResponse.text();
+      console.error(`[Loader] Web Pixel Create Mutation - Request failed. Status: ${mutationResponse.status}, Body: ${errorBody}`);
+    } else {
+      const responseJson = await mutationResponse.json();
+      if (responseJson.data?.webPixelCreate?.webPixel?.id) {
+        console.log(`[Loader] Web Pixel created/ensured successfully for shop ${session.shop}: ID ${responseJson.data.webPixelCreate.webPixel.id}`);
+      } else if (responseJson.data?.webPixelCreate?.userErrors?.length > 0) {
+        console.warn(`[Loader] Web Pixel creation for shop ${session.shop} had user errors:`, responseJson.data.webPixelCreate.userErrors);
+        const alreadyExistsError = responseJson.data.webPixelCreate.userErrors.find(
+          (err) => err.message.toLowerCase().includes("already has a web pixel") || err.message.toLowerCase().includes("has already been taken")
+        );
+        if (alreadyExistsError) {
+          console.log(`[Loader] Web pixel already exists for shop ${session.shop}. No action needed.`);
+        } else {
+          console.error(`[Loader] Web Pixel creation failed with user errors for shop ${session.shop}:`, responseJson.data.webPixelCreate.userErrors);
+        }
+      } else {
+        console.warn(`[Loader] Web Pixel creation response for shop ${session.shop} was OK, but no pixel ID or specific user errors returned:`, responseJson);
+      }
+    }
+  } catch (error) {
+    console.error(`[Loader] Error during web pixel creation attempt for shop ${session.shop}:`, error);
+  }
 
   return null;
 };
@@ -130,41 +186,15 @@ export default function Index() {
     "",
   );
 
-  // --- Web Pixel Activation State ---
-  const [pixelStatus, setPixelStatus] = useState("INACTIVE");
-  const [pixelLoading, setPixelLoading] = useState(false);
-  const [pixelError, setPixelError] = useState("");
-  const [pixelSuccess, setPixelSuccess] = useState("");
-  // --- End Web Pixel Activation State ---
-
   // --- Product Sync State ---
   const [syncStatusMessage, setSyncStatusMessage] = useState("");
   // --- End Product Sync State ---
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("pixelStatus");
-      if (stored) setPixelStatus(stored);
-    }
-  }, []);
 
   useEffect(() => {
     if (productId) {
       shopify.toast.show("Product created");
     }
   }, [productId, shopify]);
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("pixelStatus");
-      if (stored) {
-        setPixelStatus(stored);
-      }
-      // Always check current status from API on load,
-      // as localStorage might be stale or pixel deactivated elsewhere.
-      checkPixelStatus();
-    }
-  }, []); // Empty dependency array ensures this runs once on mount
 
   useEffect(() => {
     if (fetcher.data?.syncStatus) {
@@ -178,30 +208,6 @@ export default function Index() {
     }
   }, [fetcher.data, shopify]);
 
-  const checkPixelStatus = async () => {
-    try {
-      const res = await fetch("/api/activate-webpixel", { 
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json"
-        },
-        credentials: "include"
-      });
-      
-      if (res.ok) {
-        const data = await res.json();
-        if (data.status === "ACTIVE") {
-          setPixelStatus("ACTIVE");
-          if (typeof window !== "undefined") localStorage.setItem("pixelStatus", "ACTIVE");
-        }
-      }
-    } catch (e) {
-      console.error("Error checking pixel status:", e);
-      // Don't show error to user on initial check
-    }
-  };
-
   const generateProduct = () => fetcher.submit({}, { method: "POST" });
 
   const handleSyncProducts = () => {
@@ -209,266 +215,88 @@ export default function Index() {
     fetcher.submit({ _action: "syncProducts" }, { method: "POST" });
   };
 
-  // --- Web Pixel Activation Handler ---
-  const activateWebPixel = async () => {
-    setPixelLoading(true);
-    setPixelError("");
-    setPixelSuccess("");
-    try {
-      // Call backend API route for pixel activation with proper headers
-      const res = await fetch("/api/activate-webpixel", { 
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // Include authentication headers
-          "Accept": "application/json"
-        },
-        // Important: Include credentials to maintain the session
-        credentials: "include"
-      });
-      const data = await res.json();
-      if (data.status === "ACTIVE") {
-        setPixelStatus("ACTIVE");
-        if (typeof window !== "undefined") localStorage.setItem("pixelStatus", "ACTIVE");
-        setPixelSuccess("Pixel activated successfully!");
-      } else {
-        setPixelError(data.error || "Failed to activate pixel.");
-        console.error("Pixel activation error:", data);
-      }
-    } catch (e) {
-      console.error("Pixel activation exception:", e);
-      setPixelError("Unexpected error activating pixel: " + (e.message || e));
-    } finally {
-      setPixelLoading(false);
-    }
-  };
-  // --- End Web Pixel Activation Handler ---
-
   return (
     <Page>
-      <TitleBar title="Remix app template">
-        <button variant="primary" onClick={generateProduct}>
-          Generate a product
-        </button>
+      <TitleBar title="PixelNova Dashboard">
       </TitleBar>
-      <BlockStack gap="500">
-        {/* Onboarding: Product Sync Section */}
-        <Card sectioned>
-          <BlockStack gap="200">
-            <Text as="h2" variant="headingMd">
-              Step 1: Sync your Shopify products
-            </Text>
-            <Text as="p" variant="bodyMd">
-              To get started, sync your products from Shopify. This allows Pixelnova to track product views, carts, and orders accurately.<br/>
-              <strong>Estimated time:</strong> For most stores, syncing 5,000 products takes about 2–3 minutes. Larger stores may take longer. You can continue using Shopify while this runs.
-            </Text>
-            <Button
-              onClick={handleSyncProducts}
-              loading={isSyncingProducts}
-              disabled={isSyncingProducts}
-              variant="primary"
-              size="large"
-            >
-              {isSyncingProducts ? "Syncing Products..." : "Sync Products Now"}
-            </Button>
-            {syncStatusMessage && (
-              <Box padding="200"
-                   background={fetcher.data?.syncStatus === "error" ? "bg-surface-critical" : "bg-surface-success"}
-                   borderColor={fetcher.data?.syncStatus === "error" ? "border-critical" : "border-success"}
-                   borderWidth="025" borderRadius="200">
-                <Text as="p" variant="bodyMd" tone={fetcher.data?.syncStatus === "error" ? "critical" : "success"}>
-                  {syncStatusMessage}
+      <Layout>
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="500">
+              <BlockStack gap="200">
+                <Text as="h2" variant="headingMd">
+                  Welcome to PixelNova!
                 </Text>
-              </Box>
-            )}
-          </BlockStack>
-        </Card>
-        {/* End Onboarding Section */}
-        <Layout>
-          <Layout.Section>
+                <Text variant="bodyMd" as="p">
+                  This is your dashboard for managing behavior-aware product recommendations.
+                  The Web Pixel required for tracking user behavior should be automatically activated.
+                </Text>
+              </BlockStack>
+              <InlineStack gap="300">
+                <Button
+                  variant="primary"
+                  onClick={handleSyncProducts}
+                  loading={isSyncingProducts}
+                  disabled={isSyncingProducts || isLoadingProductGeneration}
+                >
+                  Sync Product Catalog
+                </Button>
+              </InlineStack>
+              {syncStatusMessage && (
+                <Text variant="bodyMd" as="p">{syncStatusMessage}</Text>
+              )}
+              {fetcher.data?.product && (
+                <Box paddingBlockStart="200">
+                  <Text as="h3" variant="headingSm">Generated Product:</Text>
+                  <List>
+                    <List.Item>ID: {productId}</List.Item>
+                    <List.Item>Title: {fetcher.data.product.title}</List.Item>
+                  </List>
+                </Box>
+              )}
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+        <Layout.Section variant="oneThird">
+          <BlockStack gap="500">
             <Card>
-              <BlockStack gap="500">
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    Congrats on creating a new Shopify app 🎉
-                  </Text>
-                  <Text variant="bodyMd" as="p">
-                    This embedded app template uses{" "}
-                    <Link
-                      url="https://shopify.dev/docs/apps/tools/app-bridge"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      App Bridge
-                    </Link>{" "}
-                    interface examples like an{" "}
-                    <Link url="/app/additional" removeUnderline>
-                      additional page in the app nav
-                    </Link>
-                    , as well as an{" "}
-                    <Link
-                      url="https://shopify.dev/docs/api/admin-graphql"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      Admin GraphQL
-                    </Link>{" "}
-                    mutation demo, to provide a starting point for app
-                    development.
-                  </Text>
-                </BlockStack>
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingMd">
-                    Get started with products
-                  </Text>
-                  <Text as="p" variant="bodyMd">
-                    Generate a product with GraphQL and get the JSON output for
-                    that product. Learn more about the{" "}
-                    <Link
-                      url="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      productCreate
-                    </Link>{" "}
-                    mutation in our API references.
-                  </Text>
-                </BlockStack>
-                <InlineStack gap="300">
-                  <Button loading={isLoadingProductGeneration} onClick={generateProduct}>
-                    Generate a product
-                  </Button>
-                  {fetcher.data?.product && (
-                    <Button
-                      url={`shopify:admin/products/${productId}`}
-                      target="_blank"
-                      variant="plain"
-                    >
-                      View product
-                    </Button>
-                  )}
-                  <Button
-                    variant={pixelStatus === "ACTIVE" ? "success" : "primary"}
-                    onClick={activateWebPixel}
-                    loading={pixelLoading}
-                    disabled={pixelStatus === "ACTIVE"}
-                  >
-                    {pixelStatus === "ACTIVE" ? "Pixel Active" : "Activate Web Pixel"}
-                  </Button>
-                </InlineStack>
-                {pixelError && (
-                  <Box color="critical" padding="200">{pixelError}</Box>
-                )}
-                {pixelSuccess && (
-                  <Box color="success" padding="200">{pixelSuccess}</Box>
-                )}
+              <BlockStack gap="200">
+                <Text as="h2" variant="headingMd">
+                  App Status
+                </Text>
+                <List>
+                  <List.Item>Web Pixel: Auto-managed</List.Item>
+                </List>
               </BlockStack>
             </Card>
-          </Layout.Section>
-          <Layout.Section variant="oneThird">
-            <BlockStack gap="500">
-              <Card>
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    App template specs
-                  </Text>
-                  <BlockStack gap="200">
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Framework
-                      </Text>
-                      <Link
-                        url="https://remix.run"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        Remix
-                      </Link>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Database
-                      </Text>
-                      <Link
-                        url="https://www.prisma.io/"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        Prisma
-                      </Link>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Interface
-                      </Text>
-                      <span>
-                        <Link
-                          url="https://polaris.shopify.com"
-                          target="_blank"
-                          removeUnderline
-                        >
-                          Polaris
-                        </Link>
-                        {", "}
-                        <Link
-                          url="https://shopify.dev/docs/apps/tools/app-bridge"
-                          target="_blank"
-                          removeUnderline
-                        >
-                          App Bridge
-                        </Link>
-                      </span>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        API
-                      </Text>
-                      <Link
-                        url="https://shopify.dev/docs/api/admin-graphql"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        GraphQL API
-                      </Link>
-                    </InlineStack>
-                  </BlockStack>
-                </BlockStack>
-              </Card>
-              <Card>
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    Next steps
-                  </Text>
-                  <List>
-                    <List.Item>
-                      Build an{" "}
-                      <Link
-                        url="https://shopify.dev/docs/apps/getting-started/build-app-example"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        {" "}
-                        example app
-                      </Link>{" "}
-                      to get started
-                    </List.Item>
-                    <List.Item>
-                      Explore Shopify's API with{" "}
-                      <Link
-                        url="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        GraphiQL
-                      </Link>
-                    </List.Item>
-                  </List>
-                </BlockStack>
-              </Card>
-            </BlockStack>
-          </Layout.Section>
-        </Layout>
-      </BlockStack>
+            <Card>
+              <BlockStack gap="200">
+                <Text as="h2" variant="headingMd">
+                  Next Steps & Information
+                </Text>
+                <List spacing="loose">
+                  <List.Item>
+                    Ensure your product catalog is synced using the button above.
+                  </List.Item>
+                  <List.Item>
+                    User behavior on your storefront will now be tracked by the Web Pixel.
+                  </List.Item>
+                  <List.Item>
+                    View insights and recommendations once enough data is collected.
+                  </List.Item>
+                  <List.Item>
+                    For more details, visit our{" "}
+                    <Link url="https://example.com/help" target="_blank" removeUnderline>
+                      help documentation
+                    </Link>
+                    .
+                  </List.Item>
+                </List>
+              </BlockStack>
+            </Card>
+          </BlockStack>
+        </Layout.Section>
+      </Layout>
     </Page>
   );
 }
