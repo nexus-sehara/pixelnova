@@ -1,7 +1,14 @@
+import {
+  Box,
+  Card,
+  Layout,
+  Link,
+  List,
+  Page,
+  Text,
+  BlockStack,
+} from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { useState } from "react";
-import { Button } from "@shopify/polaris";
-import { SetupGuide } from "../components/SetupGuide";
 
 export default function AdditionalPage() {
   return (
