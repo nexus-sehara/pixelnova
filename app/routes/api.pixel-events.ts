@@ -396,6 +396,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
       if (!currentCheckoutToken) {
         console.warn(`[${timestamp}] Order SKIPPED: checkoutToken is missing from event.checkout.token. EventName: ${eventName}, EventID: ${newEvent.id}`);
+      } else if (!clientId) {
+        console.warn(`[${timestamp}] Order SKIPPED (CKToken: ${currentCheckoutToken}): clientId is missing. EventName: ${eventName}, EventID: ${newEvent.id}`);
       } else {
         const orderItemsDataForCreate: Prisma.OrderItemUncheckedCreateWithoutOrderInput[] = [];
         for (const item of eventData.checkout.lineItems) {
@@ -423,23 +425,21 @@ export async function action({ request }: ActionFunctionArgs) {
         if (orderItemsDataForCreate.length > 0) {
           const orderUpdatePayload: Prisma.OrderUpdateInput = {
             pixelSession: { connect: { id: pixelSession.id } },
-            clientId: clientId ?? undefined,
+            clientId: clientId,
             shopifyCustomerId: orderShopifyCustomerIdFromEvent ?? undefined,
-            event: { connect: { id: newEvent.id } }, // Link to the current event causing the update
+            pixelEvent: { connect: { id: newEvent.id } },
             shopifyOrderId: orderShopifyIdFromEvent ?? undefined,
-            // Items are generally not updated, only set on creation.
           };
           Object.keys(orderUpdatePayload).forEach(key => (orderUpdatePayload as any)[key] === undefined && delete (orderUpdatePayload as any)[key]);
-
 
           const orderCreatePayload: Prisma.OrderCreateInput = {
             checkoutToken: currentCheckoutToken,
             createdAt: newEventTimestamp,
             shop: { connect: { id: shop.id } },
             pixelSession: { connect: { id: pixelSession.id } },
-            clientId: clientId ?? undefined,
+            clientId: clientId,
             shopifyCustomerId: orderShopifyCustomerIdFromEvent ?? undefined,
-            event: { connect: { id: newEvent.id } },
+            pixelEvent: { connect: { id: newEvent.id } },
             shopifyOrderId: orderShopifyIdFromEvent ?? undefined,
             orderItems: { create: orderItemsDataForCreate },
           };
