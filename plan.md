@@ -162,6 +162,22 @@ This phase is critical for ensuring data accuracy. We will revisit and solidify 
     *   Export CSVs for different segments and check data integrity.
     *   Test with a large number of profiles to check query performance.
 
+## Phase 6: Store Insights & Analytics
+
+**Step 6.1: Search Performance Analysis**
+*   **Goal:** Provide merchants with actionable insights into their storefront search performance.
+*   **Actions:**
+    *   Develop backend logic to query the `SearchQuery` table and identify:
+        *   Frequently searched terms with zero results.
+        *   Frequently searched terms with consistently low results.
+    *   Create a new admin page/section (e.g., `/app/admin/search-insights`).
+    *   The page's loader will fetch the analyzed search data.
+    *   Display these problematic search terms to the merchant with suggestions for improvement (e.g., "Consider adding 'XYZ' to product tags," "Do you stock products matching 'ABC'?").
+*   **Testing:**
+    *   Populate `SearchQuery` table with diverse test data (some good searches, some with no/low results).
+    *   Verify the backend analysis correctly identifies the problematic terms.
+    *   Verify the admin UI displays the insights clearly and accurately.
+
 ## General Considerations Throughout:
 
 *   **Iterative Testing:** Test each sub-step thoroughly before moving on.
