@@ -14,6 +14,15 @@ const PixelEventNames = {
   CHECKOUT_COMPLETED: 'checkout_completed',
 } as const;
 
+// Basic interface for the Shopify Customer object that might be present at the root of an event
+interface ShopifyCustomer {
+  id?: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+  // Add other relevant fields if needed, like marketingConsent, etc.
+}
+
 // Basic interface for the expected top-level structure of the pixel event payload
 interface PixelEventPayload {
   metadata?: {
@@ -32,6 +41,7 @@ interface PixelEventPayload {
   timestamp?: string; // ISO string
   clientId?: string;
   data?: any; // Event-specific data payload
+  customer?: ShopifyCustomer; // Root-level customer object from Shopify standard events
 }
 
 // Allowed origins logic
@@ -311,6 +321,10 @@ export async function action({ request }: ActionFunctionArgs) {
     if (eventName === PixelEventNames.PRODUCT_VIEWED) {
       const rawProductId = eventData?.productId || eventData?.productVariant?.product?.id;
       const finalProductId = toShopifyGID(rawProductId);
+      const variantIdFromEvent = eventData?.productVariant?.id; // Extract variant GID
+      
+      // Attempt to get customer ID from root event.customer.id or fallback to session's customerId
+      const customerIdFromEvent = body.customer?.id || pixelSession.shopifyCustomerId;
 
       if (finalProductId) {
         const productMeta = await prisma.productMetadata.findUnique({
@@ -326,8 +340,11 @@ export async function action({ request }: ActionFunctionArgs) {
               pixelSessionId: pixelSession.id,
               shopId: shop.id,
               productId: finalProductId,
+              variantId: variantIdFromEvent ?? undefined, // Add variantId
               viewedAt: newEventTimestamp, 
               clientId: clientId ?? null, 
+              shopifyCustomerId: customerIdFromEvent ?? undefined, // Add shopifyCustomerId
+              eventId: newEvent.id, // Add eventId
             },
           });
           // console.log(`[${timestamp}] ACTION: ProductView created for ${finalProductId}. EventID: ${eventId}`);
