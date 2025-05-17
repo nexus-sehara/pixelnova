@@ -12,6 +12,7 @@ const PixelEventNames = {
   PRODUCT_REMOVED_FROM_CART: 'product_removed_from_cart',
   CHECKOUT_STARTED: 'checkout_started',
   CHECKOUT_COMPLETED: 'checkout_completed',
+  SEARCH_SUBMITTED: 'search_submitted',
 } as const;
 
 // Basic interface for the Shopify Customer object that might be present at the root of an event
@@ -498,6 +499,32 @@ export async function action({ request }: ActionFunctionArgs) {
       }
     }
     // --- End Structured Table Ingestion ---
+
+    // --- Search Query Ingestion ---
+    if (eventName === PixelEventNames.SEARCH_SUBMITTED) {
+      const searchQuery = eventData?.searchResult?.query;
+      const resultsCount = eventData?.searchResult?.resultsCount;
+      const customerIdFromEvent = body.customer?.id || pixelSession.shopifyCustomerId; // Consistent customer ID fetching
+
+      if (searchQuery) {
+        await prisma.searchQuery.create({
+          data: {
+            shopId: shop.id,
+            pixelSessionId: pixelSession.id,
+            eventId: newEvent.id,
+            clientId: clientId ?? undefined,
+            shopifyCustomerId: customerIdFromEvent ?? undefined,
+            query: searchQuery,
+            resultsCount: typeof resultsCount === 'number' ? resultsCount : undefined,
+            timestamp: newEventTimestamp,
+          },
+        });
+        // console.log(`[${timestamp}] ACTION: SearchQuery created for query "${searchQuery}". EventID: ${newEvent.id}`);
+      } else {
+        console.warn(`[${timestamp}] SearchQuery SKIPPED: Query string missing in eventData. EventID: ${newEvent.id}`);
+      }
+    }
+    // --- End Search Query Ingestion ---
 
     return json({ message: 'Pixel event received and processed', eventId: newEvent.id, pixelSessionId: pixelSession.id }, { status: 200, headers: responseHeaders });
 

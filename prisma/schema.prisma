@@ -43,6 +43,7 @@ model Shop {
   productViews    ProductView[]
   cartActions     CartAction[]
   orders          Order[]
+  searchQueries   SearchQuery[]
 }
 
 model PixelEvent {
@@ -67,6 +68,7 @@ model PixelEvent {
   productViews ProductView[]
   cartActions  CartAction[]
   orders       Order[]
+  searchQueries SearchQuery[]
 
   @@index([shopId])
   @@index([pixelSessionId])
@@ -94,6 +96,7 @@ model PixelSession {
   productViews ProductView[]
   cartActions  CartAction[]
   orders       Order[]
+  searchQueries SearchQuery[]
 
   @@unique([shopId, clientId], name: "shopId_clientId_unique")
   @@index([shopId])
@@ -294,4 +297,27 @@ model ProductRecommendation {
 
   @@unique([sourceProductId, recommendedProductId, recommendationType])
   @@index([shopDomain])
+}
+
+model SearchQuery {
+  id                String        @id @default(cuid())
+  shopId            String
+  shop              Shop          @relation(fields: [shopId], references: [id])
+  pixelSessionId    String?
+  pixelSession      PixelSession? @relation(fields: [pixelSessionId], references: [id])
+  eventId           String?       // Link to the PixelEvent
+  pixelEvent        PixelEvent?   @relation(fields: [eventId], references: [id])
+  clientId          String?
+  shopifyCustomerId String?
+
+  query             String        // The search term used
+  resultsCount      Int?          // Number of results returned (if available in event)
+  timestamp         DateTime      @default(now())
+
+  @@index([shopId])
+  @@index([pixelSessionId])
+  @@index([query])
+  @@index([clientId])
+  @@index([shopifyCustomerId])
+  @@index([eventId])
 }
