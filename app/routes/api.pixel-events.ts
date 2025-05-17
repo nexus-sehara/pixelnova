@@ -503,7 +503,13 @@ export async function action({ request }: ActionFunctionArgs) {
     // --- Search Query Ingestion ---
     if (eventName === PixelEventNames.SEARCH_SUBMITTED) {
       const searchQuery = eventData?.searchResult?.query;
-      const resultsCount = eventData?.searchResult?.resultsCount;
+      // Correctly derive resultsCount from the length of the productVariants array
+      const productVariantsArray = eventData?.searchResult?.productVariants;
+      let resultsCount: number | undefined = undefined;
+      if (Array.isArray(productVariantsArray)) {
+        resultsCount = productVariantsArray.length;
+      }
+
       const customerIdFromEvent = body.customer?.id || pixelSession.shopifyCustomerId; // Consistent customer ID fetching
 
       if (searchQuery) {
@@ -515,11 +521,11 @@ export async function action({ request }: ActionFunctionArgs) {
             clientId: clientId ?? undefined,
             shopifyCustomerId: customerIdFromEvent ?? undefined,
             query: searchQuery,
-            resultsCount: typeof resultsCount === 'number' ? resultsCount : undefined,
+            resultsCount: resultsCount, // Use the derived resultsCount
             timestamp: newEventTimestamp,
           },
         });
-        // console.log(`[${timestamp}] ACTION: SearchQuery created for query "${searchQuery}". EventID: ${newEvent.id}`);
+        // console.log(`[${timestamp}] ACTION: SearchQuery created for query "${searchQuery}", Results: ${resultsCount}. EventID: ${newEvent.id}`);
       } else {
         console.warn(`[${timestamp}] SearchQuery SKIPPED: Query string missing in eventData. EventID: ${newEvent.id}`);
       }
