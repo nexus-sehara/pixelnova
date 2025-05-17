@@ -44,6 +44,7 @@ model Shop {
   cartActions     CartAction[]
   orders          Order[]
   searchQueries   SearchQuery[]
+  userProfiles    UserProfile[]
 }
 
 model PixelEvent {
@@ -91,6 +92,10 @@ model PixelSession {
   customerEmail     String? // From body.data.checkout.email
   shopifyCustomerId String? // From body.data.checkout.order.customer.id
   shopifyOrderId    String? // From body.data.checkout.order.id (available on checkout_completed)
+
+  // Relation to UserProfile
+  userProfileId     String?
+  userProfile       UserProfile? @relation(fields: [userProfileId], references: [id])
 
   events       PixelEvent[]
   productViews ProductView[]
@@ -237,18 +242,48 @@ model OrderItem {
 }
 
 model UserProfile {
-  id                String   @id @default(cuid())
-  userId            String
-  shopDomain        String
-  preferredCategories String[]
-  preferredTags     String[]
-  preferredBrands   String[]
-  preferredPriceMin Float?
-  preferredPriceMax Float?
-  lastUpdated       DateTime @default(now())
+  id                 String @id @default(cuid())
+  shopId             String
+  shop               Shop   @relation(fields: [shopId], references: [id])
 
-  @@unique([userId, shopDomain])
-  @@index([shopDomain])
+  email              String?  // Can be null initially
+  shopifyCustomerId  String?  // Can be null initially
+
+  // Behavioral aggregates
+  totalAppProductViews Int      @default(0)
+  totalAppAddsToCart Int      @default(0)
+  // Potentially store lists as JSON strings or in separate related tables if they grow large
+  recentlyViewedProductIds Json? // Example: ["gid://shopify/Product/123", "gid://shopify/Product/456"]
+  recentlyAddedToCartProductIds Json?
+
+  // Derived traits
+  derivedIntentScore Int?
+  derivedPersonalityType String? // e.g., "Explorer", "Focused Buyer"
+
+  // Synced Shopify Customer Data
+  firstName              String?
+  lastName               String?
+  shopifyCustomerTags    Json?    // Store as a JSON array of strings
+  totalShopifyOrders     Int?
+  totalShopifySpend      Float?   // Using Float for monetary values
+  shopifyAccountCreatedAt DateTime?
+
+
+  firstSeenAt        DateTime @default(now())
+  lastSeenAt         DateTime @updatedAt // This will automatically update
+
+  pixelSessions      PixelSession[]
+  // orders             Order[] // If directly linking UserProfile to Orders
+
+  // Add these unique constraints
+  @@unique([shopId, email])
+  @@unique([shopId, shopifyCustomerId])
+
+  @@index([shopId])
+  @@index([email])
+  @@index([shopifyCustomerId])
+  @@index([lastSeenAt])
+  @@index([derivedPersonalityType])
 }
 
 model ProductCooccurrence {

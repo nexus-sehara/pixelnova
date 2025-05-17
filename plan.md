@@ -39,7 +39,7 @@ This phase is critical for ensuring data accuracy. We will revisit and solidify 
 *   **Actions:**
     *   Review the existing `syncAllProductMetadata` function and its trigger mechanism (likely an admin action).
     *   Ensure it handles pagination for stores with many products.
-    *   Ensure it correctly extracts and stores all necessary fields (Shopify Product GID, title, handle, type, vendor, tags, status, variant info, image URLs, prices).
+    *   Ensure it correctly extracts and stores all necessary fields (Shopify Product GID, title, handle, type, vendor, tags, status, variant info including `price` and `compareAtPrice`, image URLs, prices).
 *   **Testing:**
     *   Manually trigger product sync on a test store with a diverse set of products.
     *   Verify `ProductMetadata` table is accurately populated.
@@ -177,6 +177,28 @@ This phase is critical for ensuring data accuracy. We will revisit and solidify 
     *   Populate `SearchQuery` table with diverse test data (some good searches, some with no/low results).
     *   Verify the backend analysis correctly identifies the problematic terms.
     *   Verify the admin UI displays the insights clearly and accurately.
+
+## Phase 7: Advanced Behavioral Tracking & Profiling
+
+**Step 7.1: Tracking Discount Interactions**
+*   **Goal:** Identify users interacting with discounted products to refine "Bargain Hunter" profiling.
+*   **Actions:**
+    *   **Data Prerequisite:** Ensure `ProductMetadata` sync (Step 1.3) captures `compareAtPrice` for variants to identify products on sale.
+    *   **(Optional) Discount Sync:** Consider syncing Shopify `PriceRule` data if deeper discount code/automatic discount interaction tracking is needed beyond product sale prices.
+    *   **Web Pixel Extension:** Modify the web pixel extension (`extensions/web-pixel/src/index.ts`) to:
+        *   Subscribe to the `clicked` DOM event.
+        *   When a click occurs, analyze the `event.data.element` and its context to determine if the click relates to a discounted product/price or a specific discount call-to-action.
+        *   If a discount interaction is detected, send a custom event (e.g., `custom_discount_interaction`) to the backend, including relevant details (e.g., `productId`, `originalPrice`, `discountedPrice`, type of interaction).
+    *   **Backend Processing (`api.pixel-events.ts`):**
+        *   Handle the `custom_discount_interaction` event.
+        *   Store this interaction, possibly in a new `DiscountInteraction` table or by updating a counter/flag on the `UserProfile`.
+    *   **UserProfile Update:** Incorporate frequent discount interactions into the logic that determines the `derivedPersonalityType` (specifically for "Bargain Hunter").
+*   **Testing:**
+    *   Set up products with sale prices (using `compareAtPrice`) on the test store.
+    *   Click on sale prices, discount badges, or links leading to sale sections.
+    *   Verify the web pixel sends the custom event.
+    *   Verify the backend correctly records the discount interaction.
+    *   Verify the `UserProfile` is appropriately updated to reflect bargain-hunting behavior.
 
 ## General Considerations Throughout:
 

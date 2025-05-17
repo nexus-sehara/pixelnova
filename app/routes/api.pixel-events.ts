@@ -37,6 +37,11 @@ interface PixelEventPayload {
         hostname?: string;
       };
     };
+    navigator?: {
+      userAgent?: string;
+    };
+    window?: {
+    };
   };
   id: string; // Event ID
   timestamp?: string; // ISO string
@@ -241,84 +246,171 @@ export async function action({ request }: ActionFunctionArgs) {
     });
     // console.log(`[${timestamp}] ACTION: Ensured shop exists: ${shop.domain}, ID: ${shop.id}`);
 
-    const userAgent = request.headers.get("User-Agent");
-    const sessionTokenForPixelSession = body.id; // This is the event ID, unique per event.
-
-    // Extract common identifiers from eventData
-    const checkoutToken = eventData?.checkout?.token;
-    const customerEmail = eventData?.checkout?.email;
-    const shopifyCustomerId = eventData?.checkout?.order?.customer?.id;
-    const shopifyOrderId = eventData?.checkout?.order?.id;
-
-    if (!sessionTokenForPixelSession) {
-      console.error(`[${timestamp}] ACTION CRITICAL: body.id (used for sessionTokenForPixelSession) is missing. Body snippet:`, JSON.stringify({id: body.id, metadata: body.metadata}, null, 2));
-      return json({ error: 'body.id (sessionTokenForPixelSession) is missing' }, { status: 400, headers: responseHeaders });
+    // Ensure shop is valid and available
+    if (!shop) {
+      // This case should ideally not happen if shopId was derived correctly from headers/payload
+      // Consider creating the shop if it's a new valid domain and you want to auto-register.
+      // For now, we'll log and skip if shop resolution failed.
+      console.error(`[${timestamp}] Critical: Shop not found or created for domain '${shopDomainFromReq}'. Skipping event processing.`);
+      // Return a 200 still, to not cause pixel to retry endlessly for this structural issue.
+      return json({ message: "Error: Shop not found for event." }, 200);
     }
 
-    let pixelSession;
-    if (clientId && shop.id) {
-      const createData: Prisma.PixelSessionCreateInput = {
-        shop: { connect: { id: shop.id } },
-        sessionToken: sessionTokenForPixelSession, // ID of the event that initiated this clientId session
-        clientId: clientId,
-        userAgent: userAgent ?? undefined,
-        requestShopDomain: shopDomainFromReq,
-        checkoutToken: checkoutToken ?? undefined,
-        customerEmail: customerEmail ?? undefined,
-        shopifyCustomerId: shopifyCustomerId ?? undefined,
-        shopifyOrderId: shopifyOrderId ?? undefined,
-      };
+    // Create or update PixelSession
+    // Ensure clientId is available; if not, we might need to use sessionToken as a fallback
+    // or decide this event cannot be properly sessionized.
+    const currentClientId = body.clientId || `sid:${body.id}`; // Use body.id (sessionToken) as fallback for clientId
+    if (!body.clientId) {
+      console.warn(`[${timestamp}] clientId missing in event. Falling back to sessionToken '${body.id}' for session keying. Shop: ${shop.domain}`);
+    }
 
-      const updateData: Prisma.PixelSessionUpdateInput = {
-        userAgent: userAgent ?? undefined,
-        requestShopDomain: shopDomainFromReq,
-        // lastActive is handled by @updatedAt
-        ...(checkoutToken && { checkoutToken }),
-        ...(customerEmail && { customerEmail }),
-        ...(shopifyCustomerId && { shopifyCustomerId }),
-        ...(shopifyOrderId && { shopifyOrderId }),
-      };
-      // Remove undefined properties from updateData to avoid Prisma errors or accidental nulling of fields
-      Object.keys(updateData).forEach(key => (updateData as any)[key] === undefined && delete (updateData as any)[key]);
-      
-      pixelSession = await prisma.pixelSession.upsert({
-        where: { shopId_clientId_unique: { shopId: shop.id, clientId: clientId } },
-        create: createData,
-        update: updateData,
-      });
-      // console.log(`[${timestamp}] ACTION: Upserted PixelSession (clientId: ${clientId}): ${pixelSession.id}. EventName: ${eventName}.`);
-    } else { // Fallback: no clientId. Create a PixelSession per event if needed or handle differently.
+    let pixelSession = await prisma.pixelSession.findUnique({
+      where: { shopId_clientId_unique: { shopId: shop.id, clientId: currentClientId } },
+    });
+
+    const newEventTimestamp = body.timestamp ? new Date(body.timestamp) : new Date(); // Convert ISO string to Date, fallback to now()
+
+    if (!pixelSession) {
       pixelSession = await prisma.pixelSession.create({
         data: {
-          shop: { connect: { id: shop.id } },
-          sessionToken: sessionTokenForPixelSession, // Event ID as the session token
-          userAgent: userAgent ?? undefined,
-          requestShopDomain: shopDomainFromReq,
-          checkoutToken: checkoutToken ?? undefined,
-          customerEmail: customerEmail ?? undefined,
-          shopifyCustomerId: shopifyCustomerId ?? undefined,
-          shopifyOrderId: shopifyOrderId ?? undefined,
+          shopId: shop.id,
+          clientId: currentClientId,
+          sessionToken: body.id, // original event ID / session token
+          userAgent: body.context?.navigator?.userAgent, // Corrected access with optional chaining
+          requestShopDomain: shopDomainFromReq, // Store the domain from the request
+          firstSeen: newEventTimestamp,
+          lastActive: newEventTimestamp,
+          // Extract other relevant fields for PixelSession from body.data if needed (e.g., checkoutToken)
+          checkoutToken: eventData?.checkout?.token,
+          customerEmail: eventData?.checkout?.email,
+          shopifyCustomerId: eventData?.checkout?.order?.customer?.id,
+          shopifyOrderId: eventData?.checkout?.order?.id,
         },
       });
-      // console.log(`[${timestamp}] ACTION: Created new PixelSession (no clientId, eventId as sessionToken: ${sessionTokenForPixelSession}): ${pixelSession.id}`);
+    } else {
+      pixelSession = await prisma.pixelSession.update({
+        where: { id: pixelSession.id },
+        data: {
+          lastActive: newEventTimestamp,
+          // Conditionally update these if new event provides them and they were missing
+          checkoutToken: pixelSession.checkoutToken ?? eventData?.checkout?.token,
+          customerEmail: pixelSession.customerEmail ?? eventData?.checkout?.email,
+          shopifyCustomerId: pixelSession.shopifyCustomerId ?? eventData?.checkout?.order?.customer?.id,
+          shopifyOrderId: pixelSession.shopifyOrderId ?? eventData?.checkout?.order?.id,
+        },
+      });
     }
 
-    const newEventTimestamp = eventTimestampStr ? new Date(eventTimestampStr) : new Date();
+    // Create the PixelEvent record
     const newEvent = await prisma.pixelEvent.create({
       data: {
         eventType: eventName,
         timestamp: newEventTimestamp,
-        userAgent: userAgent ?? undefined,
-        eventData: body as any, // Store the full event payload (casting to any if body structure is too complex for Prisma aot)
+        userAgent: body.context?.navigator?.userAgent, // Corrected access with optional chaining
+        eventData: body, // Store the whole body as JSON
+        shopId: shop.id,
+        pixelSessionId: pixelSession.id,
         requestShopDomain: shopDomainFromReq,
-        requestSessionToken: uniqueToken,
-        shop: { connect: { id: shop.id } },
-        pixelSession: { connect: { id: pixelSession.id } },
+        requestSessionToken: body.id,
       },
     });
-    // console.log(`[${timestamp}] ACTION: Pixel event stored: ${newEvent.id}, linked to PixelSession: ${pixelSession.id}`);
-    
-    // --- Structured Table Ingestion ---
+    console.log(`[${newEventTimestamp.toISOString()}] Event ${eventName} (ID: ${newEvent.id}, ClientID: ${currentClientId}) stored for shop ${shop.domain}.`);
+
+
+    // --- UserProfile Linking & Creation (Refined Logic) ---
+    let userProfile = null;
+    const shopifyCustomerIdFromEvent = body.customer?.id || eventData?.checkout?.order?.customer?.id;
+    const emailFromEvent = body.customer?.email || eventData?.checkout?.email;
+
+    // 1. If PixelSession already has a linked UserProfile, try to load it
+    if (pixelSession.userProfileId) {
+      userProfile = await prisma.userProfile.findUnique({ where: { id: pixelSession.userProfileId } });
+    }
+
+    // 2. If no profile linked to session yet, OR if we have strong identifiers from the event,
+    // try to find an existing UserProfile by Shopify Customer ID or Email.
+    if (!userProfile || shopifyCustomerIdFromEvent || emailFromEvent) {
+      let existingProfileByShopifyId = null;
+      if (shopifyCustomerIdFromEvent) {
+        existingProfileByShopifyId = await prisma.userProfile.findUnique({
+          where: { shopId_shopifyCustomerId: { shopId: shop.id, shopifyCustomerId: shopifyCustomerIdFromEvent } }
+        });
+      }
+      if (existingProfileByShopifyId) {
+        userProfile = existingProfileByShopifyId;
+        console.log(`[${timestamp}] Found existing UserProfile ${userProfile.id} by ShopifyCustomerID ${shopifyCustomerIdFromEvent} for shop ${shop.domain}`);
+      } else if (emailFromEvent) {
+        // Only check by email if not found by Shopify ID AND email is not an empty string
+        if (emailFromEvent.trim() !== "") {
+          const existingProfileByEmail = await prisma.userProfile.findUnique({
+            where: { shopId_email: { shopId: shop.id, email: emailFromEvent } }
+          });
+          if (existingProfileByEmail) {
+            userProfile = existingProfileByEmail;
+            console.log(`[${timestamp}] Found existing UserProfile ${userProfile.id} by email ${emailFromEvent} for shop ${shop.domain}`);
+          }
+        }
+      }
+    }
+
+    // 3. If STILL no UserProfile found after checks, create a new one.
+    if (!userProfile) {
+      userProfile = await prisma.userProfile.create({
+        data: {
+          shopId: shop.id,
+          email: emailFromEvent?.trim() !== "" ? emailFromEvent : undefined,
+          shopifyCustomerId: shopifyCustomerIdFromEvent ?? undefined,
+          firstSeenAt: pixelSession.firstSeen,
+        },
+      });
+      console.log(`[${timestamp}] Created new UserProfile ${userProfile.id} for shop ${shop.domain}. SID: ${shopifyCustomerIdFromEvent}, Email: ${emailFromEvent}`);
+    } else {
+      // Explicitly define the type for the update payload
+      const updatePayload: Prisma.UserProfileUpdateInput = {};
+      let needsAnUpdate = false;
+
+      if (emailFromEvent && emailFromEvent.trim() !== "" && !userProfile.email) {
+        updatePayload.email = emailFromEvent; // Should be assignable if UserProfile model has optional email
+        needsAnUpdate = true;
+      }
+      if (shopifyCustomerIdFromEvent && !userProfile.shopifyCustomerId) {
+        updatePayload.shopifyCustomerId = shopifyCustomerIdFromEvent; // Should be assignable if UserProfile model has optional shopifyCustomerId
+        needsAnUpdate = true;
+      }
+
+      if (needsAnUpdate) {
+        userProfile = await prisma.userProfile.update({
+          where: { id: userProfile.id },
+          data: updatePayload,
+        });
+      } else if (userProfile.lastSeenAt.toISOString() !== newEventTimestamp.toISOString()) {
+        // Only update if lastSeenAt would actually change, to trigger @updatedAt
+        // This performs a minimal write operation.
+        // Updating a field to its current value is a common way to trigger @updatedAt
+        userProfile = await prisma.userProfile.update({
+            where: {id: userProfile.id},
+            data: { shopId: userProfile.shopId } // Update with existing value to trigger @updatedAt
+        });
+      }
+    }
+
+    // 4. Link PixelSession to the identified/created UserProfile (if not already linked or if found a better match)
+    // Also update shopifyCustomerId on PixelSession if userProfile has it
+    if (pixelSession.userProfileId !== userProfile.id || 
+        (userProfile.shopifyCustomerId && pixelSession.shopifyCustomerId !== userProfile.shopifyCustomerId)) {
+      await prisma.pixelSession.update({
+        where: { id: pixelSession.id },
+        data: {
+          userProfileId: userProfile.id,
+          shopifyCustomerId: userProfile.shopifyCustomerId ?? pixelSession.shopifyCustomerId ?? undefined,
+        },
+      });
+      console.log(`[${timestamp}] Linked PixelSession ${pixelSession.id} to UserProfile ${userProfile.id}. PS.shopifyCustomerId set to ${userProfile.shopifyCustomerId ?? pixelSession.shopifyCustomerId ?? 'undefined'}`);
+    }
+    // --- End UserProfile Linking & Creation ---
+
+
+    // --- Structured Table Ingestion (ensure userProfile is passed or available if needed by these) ---
     if (eventName === PixelEventNames.PRODUCT_VIEWED) {
       const rawProductId = eventData?.productId || eventData?.productVariant?.product?.id;
       const finalProductId = toShopifyGID(rawProductId);
@@ -395,8 +487,8 @@ export async function action({ request }: ActionFunctionArgs) {
                 timestamp: newEventTimestamp,
                 pixelSessionId: pixelSession.id,
                 clientId: clientId ?? undefined,
-                checkoutToken: checkoutToken ?? undefined,
-                shopifyCustomerId: shopifyCustomerId ?? undefined,
+                checkoutToken: eventData.checkout?.token ?? undefined,
+                shopifyCustomerId: shopifyCustomerIdFromEvent ?? undefined,
                 eventId: newEvent.id,
               }
             });
