@@ -78,23 +78,22 @@ model PixelEvent {
 
 model PixelSession {
   id                String   @id @default(cuid())
+  shopId            String?  // Ensures shopId is present for the relation
   shop              Shop?    @relation(fields: [shopId], references: [id])
-  shopId            String?
-  sessionToken      String // This was from body.id
-  clientId          String? // From body.clientId
+  sessionToken      String
+  clientId          String?
   userAgent         String?
   requestShopDomain String?
   firstSeen         DateTime @default(now())
   lastActive        DateTime @updatedAt
 
-  // New fields for richer identification
-  checkoutToken     String? // From body.data.checkout.token
-  customerEmail     String? // From body.data.checkout.email
-  shopifyCustomerId String? // From body.data.checkout.order.customer.id
-  shopifyOrderId    String? // From body.data.checkout.order.id (available on checkout_completed)
+  checkoutToken     String?
+  customerEmail     String? // This can stay for quick reference on session if desired
+  shopifyCustomerId String? // This can stay for quick reference on session if desired
+  shopifyOrderId    String?
 
   // Relation to UserProfile
-  userProfileId     String?
+  userProfileId     String?      // Foreign key for UserProfile
   userProfile       UserProfile? @relation(fields: [userProfileId], references: [id])
 
   events       PixelEvent[]
@@ -108,9 +107,10 @@ model PixelSession {
   @@index([sessionToken])
   @@index([clientId])
   @@index([checkoutToken])
-  @@index([customerEmail])
-  @@index([shopifyCustomerId])
+  @@index([customerEmail]) // Consider if this needs to be unique with shopId if used as a lookup key
+  @@index([shopifyCustomerId]) // Consider if this needs to be unique with shopId if used as a lookup key
   @@index([shopifyOrderId])
+  @@index([userProfileId]) // Index the foreign key
 }
 
 model ProductMetadata {
@@ -243,48 +243,54 @@ model OrderItem {
 
 model UserProfile {
   id                 String @id @default(cuid())
+
+  // Relation to Shop
   shopId             String
   shop               Shop   @relation(fields: [shopId], references: [id])
 
-  email              String?  // Can be null initially
-  shopifyCustomerId  String?  // Can be null initially
+  // Core Identifiers for Merging - CRITICAL
+  email              String?  // For matching users who checkout with the same email
+  shopifyCustomerId  String?  // For matching logged-in Shopify customers
 
-  // Behavioral aggregates
+  // Behavioral Aggregates (as per plan.md)
   totalAppProductViews Int      @default(0)
-  totalAppAddsToCart Int      @default(0)
-  // Potentially store lists as JSON strings or in separate related tables if they grow large
-  recentlyViewedProductIds Json? // Example: ["gid://shopify/Product/123", "gid://shopify/Product/456"]
+  totalAppAddsToCart   Int      @default(0)
+  recentlyViewedProductIds Json? // Example: ["gid://shopify/Product/123", ...]
   recentlyAddedToCartProductIds Json?
 
-  // Derived traits
-  derivedIntentScore Int?
+  // Derived Traits (as per plan.md)
+  derivedIntentScore     Int?
   derivedPersonalityType String? // e.g., "Explorer", "Focused Buyer"
 
-  // Synced Shopify Customer Data
+  // Synced Shopify Customer Data (as per plan.md)
   firstName              String?
   lastName               String?
   shopifyCustomerTags    Json?    // Store as a JSON array of strings
-  totalShopifyOrders     Int?
-  totalShopifySpend      Float?   // Using Float for monetary values
-  shopifyAccountCreatedAt DateTime?
+  totalShopifyOrders     Int?     // From Shopify customer object
+  totalShopifySpend      Float?   // From Shopify customer object
+  shopifyAccountCreatedAt DateTime? // From Shopify customer object
 
+  // Timestamps
+  firstSeenAt        DateTime @default(now()) // When this profile was first created (approximates first interaction)
+  lastSeenAt         DateTime @updatedAt      // Auto-updates when any field in this record changes
 
-  firstSeenAt        DateTime @default(now())
-  lastSeenAt         DateTime @updatedAt // This will automatically update
+  // Relation to PixelSessions
+  pixelSessions      PixelSession[] // A user profile can span multiple browser sessions
 
-  pixelSessions      PixelSession[]
-  // orders             Order[] // If directly linking UserProfile to Orders
-
-  // Add these unique constraints
+  // --- UNIQUE CONSTRAINTS ---
+  // Ensure that for a given shop, an email can only be associated with one UserProfile (if email is not null)
   @@unique([shopId, email])
+  // Ensure that for a given shop, a Shopify Customer ID can only be associated with one UserProfile (if shopifyCustomerId is not null)
   @@unique([shopId, shopifyCustomerId])
 
+  // --- INDEXES for faster lookups ---
   @@index([shopId])
-  @@index([email])
-  @@index([shopifyCustomerId])
+  @@index([email]) // If you frequently look up profiles by email
+  @@index([shopifyCustomerId]) // If you frequently look up profiles by Shopify Customer ID
   @@index([lastSeenAt])
   @@index([derivedPersonalityType])
 }
+
 
 model ProductCooccurrence {
   id                String   @id @default(cuid())
