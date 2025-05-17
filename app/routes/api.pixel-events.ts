@@ -274,9 +274,7 @@ export async function action({ request }: ActionFunctionArgs) {
         const userProfile = await prisma.userProfile.upsert({
           where: { shopId_shopifyCustomerId: { shopId: shop.id, shopifyCustomerId: shopifyCustomerId } },
           update: {
-            lastSeen: new Date(eventTimestampStr || Date.now()),
-            email: customerEmail || undefined, // Update email if provided
-            // Add firstName, lastName updates here if available from event and desired
+            email: customerEmail || undefined, 
             firstName: body.customer?.firstName || undefined,
             lastName: body.customer?.lastName || undefined,
           },
@@ -286,8 +284,7 @@ export async function action({ request }: ActionFunctionArgs) {
             email: customerEmail,
             firstName: body.customer?.firstName,
             lastName: body.customer?.lastName,
-            firstSeen: new Date(eventTimestampStr || Date.now()),
-            lastSeen: new Date(eventTimestampStr || Date.now()),
+            firstSeenAt: new Date(eventTimestampStr || Date.now()),
           },
         });
         definitiveUserProfileId = userProfile.id;
@@ -298,14 +295,11 @@ export async function action({ request }: ActionFunctionArgs) {
         const userProfileByEmail = await prisma.userProfile.upsert({
             where: { shopId_email: { shopId: shop.id, email: customerEmail }},
             update: {
-                lastSeen: new Date(eventTimestampStr || Date.now()),
-                // If shopifyCustomerId becomes known later, it will be filled by the block above in a subsequent event.
             },
             create: {
                 shopId: shop.id,
                 email: customerEmail,
-                firstSeen: new Date(eventTimestampStr || Date.now()),
-                lastSeen: new Date(eventTimestampStr || Date.now()),
+                firstSeenAt: new Date(eventTimestampStr || Date.now()),
             }
         });
         definitiveUserProfileId = userProfileByEmail.id;
@@ -373,15 +367,31 @@ export async function action({ request }: ActionFunctionArgs) {
         // Try to link even fallback sessions if we have a strong identifier
         const userProfile = await prisma.userProfile.upsert({
           where: { shopId_shopifyCustomerId: { shopId: shop.id, shopifyCustomerId: shopifyCustomerId } },
-          update: { lastSeen: new Date(eventTimestampStr || Date.now()), email: customerEmail || undefined, firstName: body.customer?.firstName || undefined, lastName: body.customer?.lastName || undefined, },
-          create: { shopId: shop.id, shopifyCustomerId: shopifyCustomerId, email: customerEmail, firstName: body.customer?.firstName, lastName: body.customer?.lastName, firstSeen: new Date(eventTimestampStr || Date.now()), lastSeen: new Date(eventTimestampStr || Date.now()), },
+          update: { 
+              email: customerEmail || undefined, 
+              firstName: body.customer?.firstName || undefined, 
+              lastName: body.customer?.lastName || undefined, 
+          },
+          create: { 
+              shopId: shop.id, 
+              shopifyCustomerId: shopifyCustomerId, 
+              email: customerEmail, 
+              firstName: body.customer?.firstName, 
+              lastName: body.customer?.lastName, 
+              firstSeenAt: new Date(eventTimestampStr || Date.now()),
+          },
         });
         fallbackUserProfileId = userProfile.id;
       } else if (customerEmail) {
         const userProfileByEmail = await prisma.userProfile.upsert({
           where: { shopId_email: { shopId: shop.id, email: customerEmail }},
-          update: { lastSeen: new Date(eventTimestampStr || Date.now()) },
-          create: { shopId: shop.id, email: customerEmail, firstSeen: new Date(eventTimestampStr || Date.now()), lastSeen: new Date(eventTimestampStr || Date.now()) }
+          update: { 
+          },
+          create: { 
+              shopId: shop.id, 
+              email: customerEmail, 
+              firstSeenAt: new Date(eventTimestampStr || Date.now()),
+          }
         });
         fallbackUserProfileId = userProfileByEmail.id;
       }
@@ -484,7 +494,6 @@ export async function action({ request }: ActionFunctionArgs) {
             const userProfile = await prisma.userProfile.upsert({
                 where: { shopId_shopifyCustomerId: { shopId: shop.id, shopifyCustomerId: body.customer.id }},
                 update: { 
-                    lastSeen: new Date(eventTimestampStr || Date.now()),
                     email: body.customer.email || undefined 
                 },
                 create: {
@@ -493,8 +502,7 @@ export async function action({ request }: ActionFunctionArgs) {
                     email: body.customer.email,
                     firstName: body.customer.firstName,
                     lastName: body.customer.lastName,
-                    firstSeen: new Date(eventTimestampStr || Date.now()),
-                    lastSeen: new Date(eventTimestampStr || Date.now()),
+                    firstSeenAt: new Date(eventTimestampStr || Date.now()),
                 }
             });
             sessionUpdateForCustomer.userProfile = { connect: { id: userProfile.id } };
