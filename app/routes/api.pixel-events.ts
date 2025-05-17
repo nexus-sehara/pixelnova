@@ -502,39 +502,52 @@ export async function action({ request }: ActionFunctionArgs) {
       }
     }
 
-    if ((eventName === PixelEventNames.PRODUCT_ADDED_TO_CART || eventName === PixelEventNames.PRODUCT_REMOVED_FROM_CART) && eventData?.cartLine?.merchandise?.product?.id) {
-      const cartLine = eventData.cartLine;
-      const productId = cartLine?.merchandise?.product?.id || cartLine?.product?.id; // Check both possible paths
+    if ((eventName === PixelEventNames.PRODUCT_ADDED_TO_CART || eventName === PixelEventNames.PRODUCT_REMOVED_FROM_CART)) {
+      const cartLine = eventData?.cartLine;
+      const rawProductIdFromCart = cartLine?.merchandise?.product?.id || cartLine?.product?.id;
+      const shopifyGIDProductId = toShopifyGID(rawProductIdFromCart);
       const shopifyCustomerIdFromCart = body.customer?.id || eventData?.checkout?.order?.customer?.id || pixelSession!.shopifyCustomerId;
-      const variantId = cartLine?.merchandise?.id || cartLine?.id; // This is GID for ProductVariant
+      const variantId = cartLine?.merchandise?.id || cartLine?.id;
 
-      if (productId) {
+      console.log(`[${timestamp}] CartAction: Attempting for rawPID: ${rawProductIdFromCart}, GID: ${shopifyGIDProductId}, EventID: ${createdEvent.id}`); // Added log
+
+      if (shopifyGIDProductId) {
+          console.log(`[${timestamp}] CartAction: GID ${shopifyGIDProductId} is valid. Looking for ProductMetadata.`); // Added log
           const productMeta = await prisma.productMetadata.findUnique({
-            where: { shopifyProductId: toShopifyGID(productId) },
+            where: { shopifyProductId: shopifyGIDProductId },
             select: { shopifyProductId: true }
           });
+
+          console.log(`[${timestamp}] CartAction: ProductMetadata search result for GID ${shopifyGIDProductId}:`, productMeta); // Added log
+
           if (!productMeta) {
-            console.warn(`[${timestamp}] CartAction SKIPPED: ProductMetadata not found for productId: ${productId}. EventID: ${createdEvent.id}`);
+            console.warn(`[${timestamp}] CartAction SKIPPED: ProductMetadata not found for productId GID: ${shopifyGIDProductId}. EventID: ${createdEvent.id}`);
           } else {
-            await prisma.cartAction.create({
-              data: {
-                shopId: shop.id,
-                productId,
-                variantId: variantId ?? undefined,
-                actionType: eventName === PixelEventNames.PRODUCT_ADDED_TO_CART ? "add" : "remove",
-                quantity: eventData.cartLine.quantity ?? 1,
-                timestamp: new Date(eventTimestampStr || Date.now()),
-                pixelSessionId: pixelSession!.id,
-                clientId: clientId ?? undefined,
-                checkoutToken: eventData.checkout?.token ?? undefined,
-                shopifyCustomerId: shopifyCustomerIdFromCart ?? undefined,
-                eventId: createdEvent.id,
-              }
-            });
-            // console.log(`[${timestamp}] CartAction created for ${productId}. EventID: ${createdEvent.id}`);
+            console.log(`[${timestamp}] CartAction: ProductMetadata FOUND for GID ${shopifyGIDProductId}. Proceeding to create CartAction.`); // Added log
+            try {
+              await prisma.cartAction.create({
+                data: {
+                  shopId: shop.id,
+                  productId: shopifyGIDProductId, // Ensure this is the GID version
+                  variantId: variantId ?? undefined,
+                  actionType: eventName === PixelEventNames.PRODUCT_ADDED_TO_CART ? "add" : "remove",
+                  quantity: cartLine.quantity ?? 1, // Assuming cartLine is non-null if shopifyGIDProductId was derived
+                  timestamp: new Date(eventTimestampStr || Date.now()),
+                  pixelSessionId: pixelSession!.id,
+                  clientId: clientId ?? undefined,
+                  checkoutToken: eventData.checkout?.token ?? undefined, // This might be from a different event, ensure context is right
+                  shopifyCustomerId: shopifyCustomerIdFromCart ?? undefined,
+                  eventId: createdEvent.id,
+                }
+              });
+              console.log(`[${timestamp}] CartAction: Successfully created for GID ${shopifyGIDProductId}. EventID: ${createdEvent.id}`); // Added log
+            } catch (cartCreateError: any) {
+              console.error(`[${timestamp}] CartAction: CRITICAL - Failed to create CartAction for GID ${shopifyGIDProductId}. EventID: ${createdEvent.id}. Error:`, cartCreateError.message, cartCreateError.code, cartCreateError.meta);
+              // Potentially re-throw or handle as a more significant error if skipping isn't desired
+            }
           }
       } else {
-          console.warn(`[${timestamp}] CartAction SKIPPED: No product ID found in cartLine. EventID: ${createdEvent.id}`);
+          console.warn(`[${timestamp}] CartAction SKIPPED: shopifyGIDProductId is null/undefined. RawPID: ${rawProductIdFromCart}. EventID: ${createdEvent.id}`);
       }
     }
 
