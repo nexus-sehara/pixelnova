@@ -1,21 +1,20 @@
-FROM node:18-alpine
-RUN apk add --no-cache openssl
+# Use an official Node.js runtime as a parent image
+FROM node:20
 
-EXPOSE 3000
-
+# Set working directory
 WORKDIR /app
 
-ENV NODE_ENV=production
+# Copy package.json and package-lock.json
+COPY package.json package-lock.json ./
 
-COPY package.json package-lock.json* ./
+# Install dependencies
+RUN npm ci
 
-RUN npm ci --omit=dev && npm cache clean --force
-# Remove CLI packages since we don't need them in production by default.
-# Remove this line if you want to run CLI commands in your container.
-RUN npm remove @shopify/cli
-
+# Copy the rest of your app's source code
 COPY . .
 
-RUN npm run build
+# Expose the port your app runs on (change if needed)
+EXPOSE 3000
 
+# Start the app using the docker-start script (runs migrations at runtime)
 CMD ["npm", "run", "docker-start"]
