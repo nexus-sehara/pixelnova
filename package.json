@@ -19,6 +19,7 @@
   "vite": "vite",
   "start:remix": "remix-serve ./build/server/index.js",
   "dev:server": "nodemon server.js",
+  "envtest": "printenv | grep DATABASE_URL",
   "gh:push": "git add . && git commit -m \"chore: sync updates\" && git push origin main",
   "commit-push": "_do_commit_push() { git add . && git commit -m \"$1\" && git push origin main; }; _do_commit_push"
 },
