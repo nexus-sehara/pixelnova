@@ -11,7 +11,7 @@
   "env": "shopify app env",
   "start": "npm run start:remix",
   "docker-start": "npm run setup && npm run start",
-  "setup": "printenv && echo \"Attempting to load .env...\" && if [ -f .env ]; then export $(cat .env | xargs); fi && echo \"...env loaded.\" && printenv | grep DATABASE_URL && prisma generate --no-engine && npx prisma migrate resolve --applied 20250510161352_init_postgresql_for_accelerate && npx prisma migrate deploy",
+  "setup": "printenv && prisma generate --no-engine",
   "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
   "shopify": "shopify",
   "prisma": "prisma",
