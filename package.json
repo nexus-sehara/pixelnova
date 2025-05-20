@@ -11,7 +11,7 @@
   "env": "shopify app env",
   "start": "npm run start:remix",
   "docker-start": "npm run setup && npm run start",
-  "setup": "printenv && prisma generate --no-engine",
+  "setup": "printenv && prisma generate --no-engine && npx prisma migrate deploy",
   "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
   "shopify": "shopify",
   "prisma": "prisma",
