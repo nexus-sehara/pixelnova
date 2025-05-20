@@ -3,7 +3,7 @@
 client_id = "0ea8d909a69ea8c59c6997446c287172"
 name = "pixelnova"
 handle = "pixelnova"
-application_url = "https://pixelnova-production.up.railway.app/"
+application_url = "https://charismatic-integrity-new.up.railway.app/"
 embedded = true
 
 [build]
@@ -27,9 +27,9 @@ scopes = "read_customer_events,read_pixels,read_products,write_pixels,write_prod
 
 [auth]
 redirect_urls = [
-  "https://pixelnova-new.up.railway.app/auth/callback",
-  "hhttps://pixelnova-new.up.railway.app/auth/shopify/callback",
-  "https://pixelnova-new.up.railway.app/auth/callback"
+  "https://charismatic-integrity-new.up.railway.app/auth/callback",
+  "https://charismatic-integrity-new.up.railway.app/auth/shopify/callback",
+  "https://charismatic-integrity-new.up.railway.app/auth/callback"
 ]
 
 [pos]
