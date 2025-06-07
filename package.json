@@ -11,7 +11,7 @@
     "env": "shopify app env",
     "start": "npm run start:remix",
     "docker-start": "npm run setup && npm run start",
-    "setup": "printenv && prisma generate --no-engine && npx prisma migrate deploy",
+    "setup": "prisma generate --no-engine && sh -c 'DATABASE_URL=\"$MIGRATE_DATABASE_URL\" npx prisma migrate resolve --applied 20250510161352_init_postgresql_for_accelerate ; DATABASE_URL=\"$MIGRATE_DATABASE_URL\" npx prisma migrate deploy'",
     "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
     "shopify": "shopify",
     "prisma": "prisma",
@@ -19,7 +19,6 @@
     "vite": "vite",
     "start:remix": "remix-serve ./build/server/index.js",
     "dev:server": "nodemon server.js",
-    "envtest": "printenv | grep DATABASE_URL",
     "gh:push": "git add . && git commit -m \"chore: sync updates\" && git push origin main",
     "commit-push": "_do_commit_push() { git add . && git commit -m \"$1\" && git push origin main; }; _do_commit_push"
   },
@@ -28,7 +27,7 @@
     "node": "^18.20 || ^20.10 || >=21.0.0"
   },
   "dependencies": {
-    "@prisma/client": "^6.9.0",
+    "@prisma/client": "^6.7.0",
     "@prisma/extension-accelerate": "^1.3.0",
     "@remix-run/dev": "^2.16.1",
     "@remix-run/fs-routes": "^2.16.1",
@@ -61,7 +60,7 @@
     "eslint-config-prettier": "^10.0.1",
     "nodemon": "^3.1.10",
     "prettier": "^3.2.4",
-    "prisma": "^6.9.0",
+    "prisma": "^6.7.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3",
     "vite": "^6.2.2"
