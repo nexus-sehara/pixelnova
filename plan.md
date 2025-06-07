@@ -1,213 +1,1075 @@
-# Project Plan: Behavior-Aware Shopify App
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│  Shopify Store  │────▶│  Event Collector │────▶│  Event Database │
+│                 │     │                 │     │                 │
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+                                                         │
+                                                         ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│   Segmentation  │◀────│  Data Processor │◀────│  Feature        │
+│   Dashboard     │     │                 │     │  Extraction     │
+│                 │     │                 │     │                 │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
 
-**Project Goal:** Build a behavior-aware application for Shopify that provides targeted product recommendations and enables user segmentation for marketing, based on collected behavioral data and synced Shopify customer data.
 
-## Phase 1: Core Data Collection & Processing (Foundation - Current Focus)
 
-This phase is critical for ensuring data accuracy. We will revisit and solidify existing parts.
 
-**Step 1.1: Web Pixel Event Ingestion & Basic Storage**
-*   **Goal:** Reliably receive and store raw pixel events from the Shopify Web Pixel into the `PixelEvent` table. Ensure `PixelSession` is correctly created/updated.
-*   **Actions:**
-    *   Verify `api.pixel-events.ts` handles all key Shopify standard events (`page_viewed`, `product_viewed`, `product_added_to_cart`, `product_removed_from_cart`, `search_submitted`, `checkout_started`, `payment_info_submitted`, `checkout_completed`).
-    *   Confirm robust `PixelSession` creation and updating logic based on `clientId` (and `shopId`).
-    *   Ensure comprehensive logging for incoming events and their initial processing status.
-*   **Testing:**
-    *   On a test store, systematically trigger each standard event type.
-    *   Verify each raw event is accurately stored in the `PixelEvent` table.
-    *   Verify the `PixelSession` table is populated with correct `shopId`, `clientId`, `sessionToken` (event ID), and timestamps. Test across multiple sessions and with the same `clientId` returning.
-    *   Meticulously review server logs for any errors during event reception or `PixelSession` handling.
+Database Schema Diagram for Behavioral Customer Segmentation Engine
 
-**Step 1.2: Structured Data Tables Population & Integrity**
-*   **Goal:** Accurately populate structured tables (`ProductView`, `CartAction`, `Order`, `OrderItem`) from `PixelEvent` data, ensuring all intended fields are captured.
-*   **Actions:**
-    *   Review and refine data extraction logic in `api.pixel-events.ts` for each event type.
-        *   `ProductView`: Ensure `productId`, `variantId` (if available), `viewedAt`, `clientId`, `shopId`, `pixelSessionId`, `eventId`, and `shopifyCustomerId` (if available in event) are captured.
-        *   `CartAction`: Ensure `productId`, `variantId`, `actionType`, `quantity`, `timestamp`, `clientId`, `shopId`, `pixelSessionId`, `eventId`, and *later update* with `checkoutToken`, `shopifyCustomerId`.
-        *   `Order` & `OrderItem`: Ensure `checkoutToken`, `shopifyOrderId` (on completion), `shopifyCustomerId`, `clientId`, `shopId`, `pixelSessionId`, `eventId`, `createdAt`, `updatedAt` are captured for `Order`. For `OrderItem`, ensure `productId`, `variantId`, `quantity`, `price` are captured and correctly linked to the `Order`.
-    *   Ensure Shopify GIDs are handled correctly for all relevant IDs.
-    *   Verify all relationships (foreign keys) between tables are correctly established and populated.
-*   **Testing:**
-    *   Trigger event sequences (e.g., view product -> add to cart -> start checkout -> complete checkout).
-    *   Verify data in `ProductView`, `CartAction`, `Order`, `OrderItem` is complete and accurate for each step.
-    *   **Crucial Test:** Confirm `Order` and `OrderItem` tables are correctly populated upon `checkout_completed` (and `checkout_started` for initial upsert).
-    *   Verify `CartAction` records are correctly backfilled with `checkoutToken` and `shopifyCustomerId` after `checkout_completed`.
-    *   Test edge cases: products with/without variants, user logged in vs. anonymous during different stages.
+```
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│     Shop        │       │    Customer     │       │     Event       │
+├─────────────────┤       ├─────────────────┤       ├─────────────────┤
+│ id              │       │ id              │       │ id              │
+│ shopifyShopId   │       │ shopId          │◄──────┤ shopId          │
+│ domain          │       │ shopifyCustomerId│       │ customerId      │
+│ name            │◄──────┤ email           │       │ sessionId       │
+│ email           │       │ firstName       │       │ eventType       │
+│ createdAt       │       │ lastName        │       │ timestamp       │
+│ updatedAt       │       │ phone           │       │ properties      │
+└─────────────────┘       │ createdAt       │       │ url             │
+                          │ updatedAt       │       │ referrer        │
+                          │ firstSeen       │       │ deviceType      │
+                          │ lastSeen        │       └─────────────────┘
+                          │ totalOrders     │               ▲
+                          │ totalSpent      │               │
+                          │ averageOrderValue│               │
+                          │ lastOrderDate   │               │
+                          └─────────────────┘               │
+                                  ▲                         │
+                                  │                         │
+                                  │                         │
+┌─────────────────┐       ┌──────┴──────────┐       ┌──────┴──────────┐
+│  Segment        │       │ BehavioralProfile│       │     Session     │
+├─────────────────┤       ├─────────────────┤       ├─────────────────┤
+│ id              │       │ id              │       │ id              │
+│ shopId          │       │ customerId      │       │ sessionId       │
+│ name            │       │ shopId          │       │ shopId          │
+│ description     │       │ updatedAt       │       │ customerId      │
+│ createdAt       │       │ avgSessionDuration│      │ startedAt       │
+│ updatedAt       │       │ avgPageViewsPerSes│      │ endedAt         │
+│ isActive        │       │ devicePreference │       │ duration        │
+│ isAutomatic     │       │ favoriteCategories│      │ pageViews       │
+│ segmentType     │       │ favoriteProducts │       │ source          │
+│ rules           │       │ priceRangeLow    │       │ medium          │
+│ customerCount   │       │ priceRangeHigh   │       │ campaign        │
+│ averageValue    │       │ purchaseFrequency│       └─────────────────┘
+└─────────────────┘       │ daysSinceLastPurch│
+        ▲                 │ engagementScore  │
+        │                 │ churnRisk        │
+        │                 │ lifetimeValuePred│
+        │                 └─────────────────┘
+        │                         ▲
+        │                         │
+┌───────┴─────────┐               │
+│ CustomerSegment │               │
+├─────────────────┤       ┌───────┴─────────┐
+│ id              │       │ProductInteraction│
+│ customerId      │───────├─────────────────┤
+│ segmentId       │       │ id              │
+│ addedAt         │       │ eventId         │
+│ score           │       │ customerId      │
+└─────────────────┘       │ sessionId       │
+                          │ shopId          │
+                          │ productId       │
+                          │ variantId       │
+                          │ interactionType │
+                          │ timestamp       │
+                          │ timeSpent       │
+                          └─────────────────┘
+```
 
-**Step 1.3: Product Metadata Sync**
-*   **Goal:** Ensure the local `ProductMetadata` table is a reliable and up-to-date reflection of the Shopify store's products.
-*   **Actions:**
-    *   Review the existing `syncAllProductMetadata` function and its trigger mechanism (likely an admin action).
-    *   Ensure it handles pagination for stores with many products.
-    *   Ensure it correctly extracts and stores all necessary fields (Shopify Product GID, title, handle, type, vendor, tags, status, variant info including `price` and `compareAtPrice`, image URLs, prices).
-*   **Testing:**
-    *   Manually trigger product sync on a test store with a diverse set of products.
-    *   Verify `ProductMetadata` table is accurately populated.
-    *   Test with products having multiple variants, different statuses, special characters in names, etc.
-    *   Verify updates to existing products in Shopify are reflected after a re-sync.
+## Key Relationships
 
-## Phase 2: User Profile Implementation
+1. **Shop to Customer**: One-to-many (one shop has many customers)
+2. **Customer to Event**: One-to-many (one customer has many events)
+3. **Customer to BehavioralProfile**: One-to-one (each customer has one profile)
+4. **Customer to Session**: One-to-many (one customer has many sessions)
+5. **Customer to ProductInteraction**: One-to-many (one customer has many product interactions)
+6. **Customer to Segment**: Many-to-many (through CustomerSegment junction table)
+7. **Shop to Segment**: One-to-many (one shop has many segments)
 
-**Step 2.1: `UserProfile` Model & `PixelSession` Linkage**
-*   **Goal:** Define the `UserProfile` Prisma model and establish its relationship with `PixelSession`.
-*   **Actions:**
-    *   Define `UserProfile` schema in `prisma/schema.prisma` (fields for Shopify customer data, aggregated behavioral stats, affinity lists, derived traits, timestamps).
-    *   Add `userProfileId` (String, nullable) and `userProfile` (relation, optional) to the `PixelSession` model.
-    *   Run `npx prisma migrate dev --name add_user_profile_and_link_pixel_session`.
-*   **Testing:**
-    *   Verify database schema changes are applied successfully.
+## Data Flow
 
-**Step 2.2: `UserProfile` Creation & Linking Logic**
-*   **Goal:** Create/update `UserProfile` records and link them to `PixelSession` during event processing.
-*   **Actions:**
-    *   Modify `api.pixel-events.ts`:
-        *   When a new `PixelSession` is created (first time a `clientId` is seen for a shop):
-            *   Create a corresponding `UserProfile` (e.g., with `shopId`, `firstSeenAt` from the session, `lastSeenAt`).
-            *   Set `PixelSession.userProfileId` to the new `UserProfile.id`.
-        *   When an event provides `body.customer.id` (Shopify Customer ID) or `body.data.checkout.email`:
-            *   Attempt to find an existing `UserProfile` by `shopifyCustomerId` (if available) or `email` for that shop.
-            *   If found: Link current `PixelSession.userProfileId` to this `UserProfile`. Update `UserProfile.lastSeenAt`. If Shopify customer data from the event is newer/more complete than what's in the profile, update the `UserProfile`.
-            *   If not found: Create a new `UserProfile`. Populate it with available Shopify customer data from the event and `shopId`. Link current `PixelSession.userProfileId`.
-            *   Ensure `PixelSession.shopifyCustomerId` is also populated if the Shopify Customer ID becomes known.
-*   **Testing:**
-    *   Scenario 1 (Anonymous user): New `clientId` -> `PixelSession` created, new `UserProfile` created, `PixelSession.userProfileId` linked.
-    *   Scenario 2 (Anonymous to Known): Anonymous user browses (creates `PixelSession` & linked `UserProfile`). Then logs in / checkouts. Event contains `customer.id`.
-        *   Test: `PixelSession` gets its `shopifyCustomerId` field updated. The `UserProfile` linked to this `PixelSession` gets its `shopifyCustomerId`, `email`, etc., populated/updated. `lastSeenAt` updated.
-    *   Scenario 3 (Known user returns): User previously logged in/checked out (has `UserProfile` with `shopifyCustomerId`). Starts a new session (new `PixelSession`, new `clientId`). Then logs in.
-        *   Test: New `PixelSession` eventually gets linked to the *existing* `UserProfile` via `shopifyCustomerId`.
-    *   Verify data flow and updates in both `PixelSession` and `UserProfile` tables.
+1. Web Pixel events are collected in the **Event** table
+2. Events are processed into **Session** records
+3. Session data is aggregated into **BehavioralProfile** records
+4. Segmentation algorithms analyze profiles to create **Segment** records
+5. Customers are assigned to segments through the **CustomerSegment** junction table
+6. Product interactions are tracked separately for detailed product affinity analysis
 
-**Step 2.3: Basic Behavioral Aggregation on `UserProfile` (Iteration 1)**
-*   **Goal:** Update simple rolling aggregates on `UserProfile` directly during event processing.
-*   **Actions:**
-    *   In `api.pixel-events.ts`, after a `UserProfile` is identified/created for the current session:
-        *   On `ProductView`: Increment `UserProfile.totalAppProductViews`. Add `productId` to `UserProfile.recentlyViewedProductIds` (e.g., as a list, perhaps capped at the last 10-20 unique IDs).
-        *   On `CartAction` (add): Increment `UserProfile.totalAppAddsToCart`. Add `productId` to `UserProfile.recentlyAddedToCartProductIds`.
-        *   Update `UserProfile.lastSeenAt` on every event linked to the profile.
-*   **Testing:**
-    *   Perform a series of views and cart adds.
-    *   Check the relevant `UserProfile` record.
-    *   Verify `totalAppProductViews`, `totalAppAddsToCart`, `lastSeenAt` are updated correctly.
-    *   Verify `recentlyViewedProductIds` and `recentlyAddedToCartProductIds` lists are populated as expected.
+This schema design allows for efficient storage and retrieval of behavioral data while supporting the complex queries needed for customer segmentation.
 
-## Phase 3: Historical Shopify Customer Data Sync
 
-**Step 3.1: Admin UI & Backend for Sync Trigger**
-*   **Goal:** Allow merchants to initiate a sync of their existing Shopify customer data.
-*   **Actions:**
-    *   Create an admin page in the Remix app (e.g., `/app/admin/data-sync`).
-    *   Add a "Sync Shopify Customers" button.
-    *   Create a Remix action that, on submit:
-        *   Authenticates as admin.
-        *   Uses `admin.graphql` to fetch customers from Shopify (potentially with date filters like "updated in last 60 days" to manage scope, or all customers). Handle pagination.
-        *   For each Shopify customer, upsert a record into `UserProfile` using `shopifyCustomerId` as the key. Populate fields like `email`, `firstName`, `lastName`, `shopifyCustomerTags`, `totalShopifyOrders` (from `customer.ordersCount`), `totalShopifySpend` (from `customer.totalSpent`), `shopifyAccountCreatedAt`.
-*   **Testing:**
-    *   Ensure admin UI is accessible and the button works.
-    *   Trigger the sync.
-    *   Monitor server logs for progress and any errors (especially rate limiting).
-    *   Verify `UserProfile` table:
-        *   New profiles are created for Shopify customers not yet seen by the pixel.
-        *   Existing profiles (matched by `shopifyCustomerId`) are updated with Shopify data.
-    *   Test idempotency: running the sync multiple times should not create duplicate profiles.
 
-## Phase 4: Recommendation Engine (Simplified Placements)
+Implementing a Behavioral Customer Segmentation Engine
 
-**Step 4.1: Define Recommendation Logic & API Endpoints**
-*   **Goal:** Design logic for recommendations on Cart, Post-Checkout, and Exit-Intent pages, and create APIs to serve them.
-*   **Actions:**
-    *   **Logic Definition:**
-        *   Cart Page: "Frequently bought with items in cart" (use `FrequentlyBoughtTogether` with product IDs from cart), "Products you recently viewed" (use `UserProfile.recentlyViewedProductIds`).
-        *   Post-Checkout: "You might also like" (use `FrequentlyBoughtTogether` based on purchased items), "Re-order favorites" (if applicable).
-        *   Exit-Intent: "Still thinking about these?" (use `UserProfile.recentlyViewedProductIds` or `recentlyAddedToCartProductIds`).
-    *   **API Endpoints (Remix routes):**
-        *   `GET /api/recommendations/cart?shop=...&clientId=...&cartProductIds=gid://shopify/Product/123,gid://shopify/Product/456`
-        *   `GET /api/recommendations/post-checkout?shop=...&clientId=...&orderId=...` (or `&lastPurchasedProductIds=...`)
-        *   `GET /api/recommendations/exit-intent?shop=...&clientId=...`
-    *   These APIs will query `UserProfile`, `ProductMetadata`, `FrequentlyBoughtTogether`, `ProductCooccurrence` tables.
-*   **Testing:**
-    *   Manually call API endpoints with various parameters (different client IDs, product IDs).
-    *   Verify the JSON response contains the expected product recommendations.
-    *   Test cases where user profile has data vs. minimal data.
+This document outlines the implementation approach for building a Behavioral Customer Segmentation Engine using Shopify Web Pixel data stored in a Prisma database.
 
-**Step 4.2: Frontend Display (Theme App Extension)**
-*   **Goal:** Display recommendations on the storefront.
-*   **Actions:**
-    *   Develop a Shopify Theme App Extension.
-    *   Use JavaScript within the extension to:
-        *   Fetch `clientId` (from Shopify Web Pixel API if available, or generate/retrieve from cookie/localStorage).
-        *   Collect necessary context (cart items, current page).
-        *   Call your app's recommendation API endpoints.
-        *   Render the product recommendations using Polaris components or custom HTML.
-*   **Testing:**
-    *   Install the theme app extension on a test store.
-    *   Navigate to cart page, complete a checkout, simulate exit intent.
-    *   Verify recommendations appear correctly and are relevant based on the logic.
-    *   Test responsiveness and loading states.
+Implementation Architecture
 
-## Phase 5: Marketing Segmentation Feature
+High-Level Architecture
 
-**Step 5.1: Admin UI for Segment Builder & Export**
-*   **Goal:** Allow merchants to define customer segments based on `UserProfile` data and export them.
-*   **Actions:**
-    *   Create an admin page (e.g., `/app/admin/segments`).
-    *   Design a UI with filters for `UserProfile` fields (e.g., `topViewedCategories contains 'X'`, `totalShopifySpend > Y`, `lastSeenAt within Z days`).
-    *   Display a live count of users matching the current segment criteria.
-    *   Provide an "Export CSV" button.
-    *   Backend Remix action to:
-        *   Take segment criteria.
-        *   Query the `UserProfile` table.
-        *   Generate and return a CSV file (e.g., with `email`, `firstName`, `lastName`).
-*   **Testing:**
-    *   Create various segments using the UI. Verify counts are accurate.
-    *   Export CSVs for different segments and check data integrity.
-    *   Test with a large number of profiles to check query performance.
+Plain Text
 
-## Phase 6: Store Insights & Analytics
 
-**Step 6.1: Search Performance Analysis**
-*   **Goal:** Provide merchants with actionable insights into their storefront search performance.
-*   **Actions:**
-    *   Develop backend logic to query the `SearchQuery` table and identify:
-        *   Frequently searched terms with zero results.
-        *   Frequently searched terms with consistently low results.
-    *   Create a new admin page/section (e.g., `/app/admin/search-insights`).
-    *   The page's loader will fetch the analyzed search data.
-    *   Display these problematic search terms to the merchant with suggestions for improvement (e.g., "Consider adding 'XYZ' to product tags," "Do you stock products matching 'ABC'?").
-*   **Testing:**
-    *   Populate `SearchQuery` table with diverse test data (some good searches, some with no/low results).
-    *   Verify the backend analysis correctly identifies the problematic terms.
-    *   Verify the admin UI displays the insights clearly and accurately.
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│  Shopify Store  │────▶│  Event Collector │────▶│  Event Database │
+│                 │     │                 │     │                 │
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+                                                         │
+                                                         ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                 │     │                 │
+│   Segmentation  │◀────│  Data Processor │◀────│  Feature        │
+│   Dashboard     │     │                 │     │  Extraction     │
+│                 │     │                 │     │                 │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
 
-## Phase 7: Advanced Behavioral Tracking & Profiling
 
-**Step 7.1: Tracking Discount Interactions**
-*   **Goal:** Identify users interacting with discounted products to refine "Bargain Hunter" profiling.
-*   **Actions:**
-    *   **Data Prerequisite:** Ensure `ProductMetadata` sync (Step 1.3) captures `compareAtPrice` for variants to identify products on sale.
-    *   **(Optional) Discount Sync:** Consider syncing Shopify `PriceRule` data if deeper discount code/automatic discount interaction tracking is needed beyond product sale prices.
-    *   **Web Pixel Extension:** Modify the web pixel extension (`extensions/web-pixel/src/index.ts`) to:
-        *   Subscribe to the `clicked` DOM event.
-        *   When a click occurs, analyze the `event.data.element` and its context to determine if the click relates to a discounted product/price or a specific discount call-to-action.
-        *   If a discount interaction is detected, send a custom event (e.g., `custom_discount_interaction`) to the backend, including relevant details (e.g., `productId`, `originalPrice`, `discountedPrice`, type of interaction).
-    *   **Backend Processing (`api.pixel-events.ts`):**
-        *   Handle the `custom_discount_interaction` event.
-        *   Store this interaction, possibly in a new `DiscountInteraction` table or by updating a counter/flag on the `UserProfile`.
-    *   **UserProfile Update:** Incorporate frequent discount interactions into the logic that determines the `derivedPersonalityType` (specifically for "Bargain Hunter").
-*   **Testing:**
-    *   Set up products with sale prices (using `compareAtPrice`) on the test store.
-    *   Click on sale prices, discount badges, or links leading to sale sections.
-    *   Verify the web pixel sends the custom event.
-    *   Verify the backend correctly records the discount interaction.
-    *   Verify the `UserProfile` is appropriately updated to reflect bargain-hunting behavior.
+Components
 
-## General Considerations Throughout:
+1.
+Event Collector: Captures Web Pixel events from Shopify stores
 
-*   **Iterative Testing:** Test each sub-step thoroughly before moving on.
-*   **Logging:** Implement comprehensive logging for debugging and monitoring.
-*   **Error Handling:** Graceful error handling in API routes and backend processes.
-*   **Security:** Sanitize inputs, protect PII, secure API endpoints.
-*   **Performance:** Optimize database queries, especially for aggregations and recommendation generation. Consider indexing.
-*   **Shopify API Rate Limits:** Manage API calls to Shopify to avoid being rate-limited, especially during historical syncs.
-*   **Code Quality:** Follow best practices, use linting and formatting.
+2.
+Event Database: Stores raw event data (your existing Prisma setup)
 
-This plan provides a roadmap. We will adjust and refine it as we progress. 
+3.
+Feature Extraction: Processes raw events into behavioral features
+
+4.
+Data Processor: Runs segmentation algorithms and updates customer profiles
+
+5.
+Segmentation Dashboard: Visualizes segments and provides insights
+
+Implementation Steps
+
+1. Data Collection Layer
+
+You mentioned you're already collecting Web Pixel events in your Prisma database. Ensure you're capturing these key events:
+
+•
+page_viewed
+
+•
+product_viewed
+
+•
+collection_viewed
+
+•
+search_submitted
+
+•
+cart_viewed
+
+•
+checkout_started
+
+•
+checkout_completed
+
+•
+payment_info_submitted
+
+For each event, store:
+
+•
+Event type
+
+•
+Timestamp
+
+•
+Customer/session identifier
+
+•
+Event properties (product details, page info, etc.)
+
+•
+Context (device, referrer, etc.)
+
+2. Data Processing Layer
+
+Session Processing
+
+1.
+Group events by session ID
+
+2.
+Calculate session metrics:
+
+•
+Duration
+
+•
+Page views
+
+•
+Products viewed
+
+•
+Categories explored
+
+•
+Search terms used
+
+•
+Conversion (purchased or not)
+
+
+
+TypeScript
+
+
+// Example session processing function
+async function processSession(sessionId: string) {
+  // Get all events for this session
+  const events = await prisma.event.findMany({
+    where: { sessionId },
+    orderBy: { timestamp: 'asc' },
+  });
+  
+  // Calculate session duration
+  const startTime = events[0].timestamp;
+  const endTime = events[events.length - 1].timestamp;
+  const duration = endTime.getTime() - startTime.getTime();
+  
+  // Count page views
+  const pageViews = events.filter(e => e.eventType === 'page_viewed').length;
+  
+  // Check if session resulted in purchase
+  const purchased = events.some(e => e.eventType === 'checkout_completed');
+  
+  // Create or update session record
+  await prisma.session.upsert({
+    where: { sessionId },
+    update: {
+      endedAt: endTime,
+      duration: Math.floor(duration / 1000), // Convert to seconds
+      pageViews,
+      // Add other metrics
+    },
+    create: {
+      sessionId,
+      shopId: events[0].shopId,
+      customerId: events[0].customerId,
+      startedAt: startTime,
+      endedAt: endTime,
+      duration: Math.floor(duration / 1000),
+      pageViews,
+      // Add other fields
+    },
+  });
+}
+
+
+Customer Profile Updates
+
+1.
+Periodically update customer behavioral profiles
+
+2.
+Calculate metrics like:
+
+•
+Average session duration
+
+•
+Favorite product categories
+
+•
+Price sensitivity
+
+•
+Purchase frequency
+
+•
+Engagement level
+
+
+
+TypeScript
+
+
+// Example customer profile update function
+async function updateCustomerProfile(customerId: string) {
+  // Get customer's sessions
+  const sessions = await prisma.session.findMany({
+    where: { customerId },
+    orderBy: { startedAt: 'desc' },
+  });
+  
+  // Calculate average session duration
+  const totalDuration = sessions.reduce((sum, session) => sum + (session.duration || 0), 0);
+  const avgSessionDuration = sessions.length > 0 ? totalDuration / sessions.length : 0;
+  
+  // Get product interactions
+  const productInteractions = await prisma.productInteraction.findMany({
+    where: { customerId },
+    orderBy: { timestamp: 'desc' },
+  });
+  
+  // Calculate favorite categories
+  const categoryInteractions = {};
+  for (const interaction of productInteractions) {
+    // Assuming you have product category data
+    const product = await prisma.product.findUnique({
+      where: { id: interaction.productId },
+    });
+    
+    if (product && product.categoryId) {
+      categoryInteractions[product.categoryId] = (categoryInteractions[product.categoryId] || 0) + 1;
+    }
+  }
+  
+  // Sort categories by interaction count
+  const favoriteCategories = Object.entries(categoryInteractions)
+    .map(([categoryId, count]) => ({ categoryId, score: count }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5); // Top 5 categories
+  
+  // Update behavioral profile
+  await prisma.behavioralProfile.upsert({
+    where: { customerId },
+    update: {
+      averageSessionDuration: avgSessionDuration,
+      favoriteCategories: favoriteCategories,
+      // Update other metrics
+    },
+    create: {
+      customerId,
+      shopId: (await prisma.customer.findUnique({ where: { id: customerId } })).shopId,
+      averageSessionDuration: avgSessionDuration,
+      favoriteCategories: favoriteCategories,
+      // Add other fields
+    },
+  });
+}
+
+
+3. Segmentation Algorithm
+
+Feature Vector Creation
+
+For each customer, create a feature vector that represents their behavior:
+
+TypeScript
+
+
+async function createCustomerFeatureVector(customerId: string) {
+  // Get customer profile
+  const profile = await prisma.behavioralProfile.findUnique({
+    where: { customerId },
+  });
+  
+  // Get purchase history
+  const purchases = await prisma.event.findMany({
+    where: {
+      customerId,
+      eventType: 'checkout_completed',
+    },
+  });
+  
+  // Create feature vector
+  return {
+    // RFM (Recency, Frequency, Monetary) features
+    daysSinceLastPurchase: profile.daysSinceLastPurchase || 999,
+    purchaseFrequencyScore: purchases.length,
+    averageOrderValue: profile.averageOrderValue || 0,
+    
+    // Browsing behavior
+    averageSessionDuration: profile.averageSessionDuration || 0,
+    averagePageViewsPerSession: profile.averagePageViewsPerSession || 0,
+    
+    // Product preferences (encoded as numbers)
+    pricePreference: profile.priceRangeHigh ? 
+      (profile.priceRangeLow + profile.priceRangeHigh) / 2 : 0,
+    
+    // Engagement
+    engagementScore: profile.engagementScore || 0,
+    
+    // Add more features as needed
+  };
+}
+
+
+Clustering Algorithm
+
+Use a clustering algorithm like K-means to group customers with similar behavior:
+
+TypeScript
+
+
+import * as tf from '@tensorflow/tfjs-node';
+
+async function runSegmentationAlgorithm(shopId: string) {
+  // Create a new segmentation job
+  const job = await prisma.segmentationJob.create({
+    data: {
+      shopId,
+      status: 'running',
+      algorithm: 'kmeans',
+      parameters: { k: 5 }, // Start with 5 segments
+    },
+  });
+  
+  try {
+    // Get all customers for this shop
+    const customers = await prisma.customer.findMany({
+      where: { shopId },
+      include: { behavioralProfile: true },
+    });
+    
+    // Create feature vectors
+    const featureVectors = [];
+    const customerIds = [];
+    
+    for (const customer of customers) {
+      if (customer.behavioralProfile) {
+        const vector = [
+          customer.behavioralProfile.averageSessionDuration || 0,
+          customer.behavioralProfile.averagePageViewsPerSession || 0,
+          customer.behavioralProfile.engagementScore || 0,
+          customer.totalOrders || 0,
+          customer.averageOrderValue || 0,
+          // Add more features
+        ];
+        
+        featureVectors.push(vector);
+        customerIds.push(customer.id);
+      }
+    }
+    
+    if (featureVectors.length === 0) {
+      throw new Error('No customer profiles available for segmentation');
+    }
+    
+    // Normalize data
+    const featureTensor = tf.tensor2d(featureVectors);
+    const { mean, variance } = tf.moments(featureTensor, 0);
+    const stddev = tf.sqrt(variance);
+    const normalizedFeatures = featureTensor.sub(mean).div(stddev.add(tf.scalar(1e-6)));
+    
+    // Run K-means
+    const k = 5; // Number of clusters
+    const kmeans = await runKMeans(normalizedFeatures.arraySync(), k);
+    
+    // Create segments
+    const segments = [];
+    for (let i = 0; i < k; i++) {
+      const segment = await prisma.segment.create({
+        data: {
+          shopId,
+          name: `Segment ${i + 1}`,
+          description: 'Automatically generated segment',
+          isActive: true,
+          isAutomatic: true,
+          segmentType: 'behavioral',
+        },
+      });
+      segments.push(segment);
+    }
+    
+    // Assign customers to segments
+    for (let i = 0; i < customerIds.length; i++) {
+      const clusterId = kmeans.clusters[i];
+      await prisma.customerSegment.create({
+        data: {
+          customerId: customerIds[i],
+          segmentId: segments[clusterId].id,
+          score: 1.0, // Confidence score
+        },
+      });
+    }
+    
+    // Update segment metrics
+    for (let i = 0; i < k; i++) {
+      const customerCount = kmeans.clusters.filter(c => c === i).length;
+      await prisma.segment.update({
+        where: { id: segments[i].id },
+        data: { customerCount },
+      });
+    }
+    
+    // Update job status
+    await prisma.segmentationJob.update({
+      where: { id: job.id },
+      data: {
+        status: 'completed',
+        completedAt: new Date(),
+        segmentsCreated: k,
+      },
+    });
+    
+    // Analyze and label segments
+    await labelSegments(segments, featureVectors, kmeans.clusters);
+    
+  } catch (error) {
+    // Update job status on error
+    await prisma.segmentationJob.update({
+      where: { id: job.id },
+      data: {
+        status: 'failed',
+        completedAt: new Date(),
+      },
+    });
+    throw error;
+  }
+}
+
+// Simple K-means implementation
+async function runKMeans(data, k, maxIterations = 100) {
+  // Initialize centroids randomly
+  let centroids = [];
+  for (let i = 0; i < k; i++) {
+    centroids.push(data[Math.floor(Math.random() * data.length)]);
+  }
+  
+  let clusters = new Array(data.length).fill(0);
+  let iterations = 0;
+  let changed = true;
+  
+  while (changed && iterations < maxIterations) {
+    changed = false;
+    iterations++;
+    
+    // Assign points to nearest centroid
+    for (let i = 0; i < data.length; i++) {
+      const point = data[i];
+      let minDistance = Infinity;
+      let closestCluster = 0;
+      
+      for (let j = 0; j < k; j++) {
+        const distance = euclideanDistance(point, centroids[j]);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestCluster = j;
+        }
+      }
+      
+      if (clusters[i] !== closestCluster) {
+        clusters[i] = closestCluster;
+        changed = true;
+      }
+    }
+    
+    // Recalculate centroids
+    const newCentroids = new Array(k).fill(0).map(() => new Array(data[0].length).fill(0));
+    const counts = new Array(k).fill(0);
+    
+    for (let i = 0; i < data.length; i++) {
+      const cluster = clusters[i];
+      counts[cluster]++;
+      
+      for (let j = 0; j < data[i].length; j++) {
+        newCentroids[cluster][j] += data[i][j];
+      }
+    }
+    
+    for (let i = 0; i < k; i++) {
+      if (counts[i] > 0) {
+        for (let j = 0; j < newCentroids[i].length; j++) {
+          newCentroids[i][j] /= counts[i];
+        }
+        centroids[i] = newCentroids[i];
+      }
+    }
+  }
+  
+  return { clusters, centroids };
+}
+
+function euclideanDistance(a, b) {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    sum += Math.pow(a[i] - b[i], 2);
+  }
+  return Math.sqrt(sum);
+}
+
+
+Segment Labeling
+
+Analyze the characteristics of each segment to assign meaningful labels:
+
+TypeScript
+
+
+async function labelSegments(segments, featureVectors, clusters) {
+  // For each segment
+  for (let i = 0; i < segments.length; i++) {
+    // Get all feature vectors in this segment
+    const segmentVectors = featureVectors.filter((_, index) => clusters[index] === i);
+    
+    if (segmentVectors.length === 0) continue;
+    
+    // Calculate average values for each feature
+    const avgFeatures = calculateAverageFeatures(segmentVectors);
+    
+    // Determine segment characteristics
+    const characteristics = [];
+    
+    // Example: Check purchase frequency (feature index 3)
+    if (avgFeatures[3] > 10) {
+      characteristics.push('frequent_purchaser');
+    } else if (avgFeatures[3] < 2) {
+      characteristics.push('rare_purchaser');
+    }
+    
+    // Example: Check average order value (feature index 4)
+    if (avgFeatures[4] > 100) {
+      characteristics.push('high_value');
+    } else if (avgFeatures[4] < 30) {
+      characteristics.push('budget_conscious');
+    }
+    
+    // Example: Check engagement (feature index 2)
+    if (avgFeatures[2] > 70) {
+      characteristics.push('highly_engaged');
+    } else if (avgFeatures[2] < 30) {
+      characteristics.push('low_engagement');
+    }
+    
+    // Generate segment name based on characteristics
+    let segmentName = 'Unknown Segment';
+    
+    if (characteristics.includes('frequent_purchaser') && characteristics.includes('high_value')) {
+      segmentName = 'High-Value Loyal Customers';
+    } else if (characteristics.includes('frequent_purchaser') && characteristics.includes('budget_conscious')) {
+      segmentName = 'Frequent Budget Shoppers';
+    } else if (characteristics.includes('rare_purchaser') && characteristics.includes('high_value')) {
+      segmentName = 'Big Spenders (Infrequent)';
+    } else if (characteristics.includes('highly_engaged') && !characteristics.includes('frequent_purchaser')) {
+      segmentName = 'Engaged Browsers';
+    } else if (characteristics.includes('low_engagement') && characteristics.includes('rare_purchaser')) {
+      segmentName = 'At-Risk Customers';
+    }
+    
+    // Update segment name
+    await prisma.segment.update({
+      where: { id: segments[i].id },
+      data: {
+        name: segmentName,
+        description: `Automatically labeled based on ${characteristics.join(', ')} characteristics`,
+      },
+    });
+  }
+}
+
+function calculateAverageFeatures(vectors) {
+  const sum = new Array(vectors[0].length).fill(0);
+  
+  for (const vector of vectors) {
+    for (let i = 0; i < vector.length; i++) {
+      sum[i] += vector[i];
+    }
+  }
+  
+  return sum.map(value => value / vectors.length);
+}
+
+
+4. Segment Maintenance
+
+Regular Updates
+
+Schedule regular jobs to update segments as customer behavior changes:
+
+TypeScript
+
+
+// Run this job daily or weekly
+async function updateSegments(shopId: string) {
+  // Update customer profiles first
+  const customers = await prisma.customer.findMany({
+    where: { shopId },
+  });
+  
+  for (const customer of customers) {
+    await updateCustomerProfile(customer.id);
+  }
+  
+  // Run segmentation algorithm
+  await runSegmentationAlgorithm(shopId);
+}
+
+
+Segment Drift Detection
+
+Monitor how segments change over time:
+
+TypeScript
+
+
+async function detectSegmentDrift(segmentId: string) {
+  // Get current segment metrics
+  const currentMetrics = await prisma.segmentMetrics.findFirst({
+    where: { segmentId },
+    orderBy: { date: 'desc' },
+  });
+  
+  // Get historical metrics (e.g., from 30 days ago)
+  const historicalDate = new Date();
+  historicalDate.setDate(historicalDate.getDate() - 30);
+  
+  const historicalMetrics = await prisma.segmentMetrics.findFirst({
+    where: {
+      segmentId,
+      date: {
+        lte: historicalDate,
+      },
+    },
+    orderBy: { date: 'desc' },
+  });
+  
+  if (!currentMetrics || !historicalMetrics) return null;
+  
+  // Calculate drift metrics
+  const customerCountDrift = (currentMetrics.customerCount - historicalMetrics.customerCount) / historicalMetrics.customerCount;
+  const conversionRateDrift = currentMetrics.conversionRate - historicalMetrics.conversionRate;
+  const aovDrift = (currentMetrics.averageOrderValue - historicalMetrics.averageOrderValue) / historicalMetrics.averageOrderValue;
+  
+  return {
+    customerCountDrift,
+    conversionRateDrift,
+    aovDrift,
+    significantDrift: Math.abs(customerCountDrift) > 0.2 || Math.abs(conversionRateDrift) > 0.1 || Math.abs(aovDrift) > 0.15,
+  };
+}
+
+
+5. API Layer
+
+Create API endpoints to access segment data:
+
+TypeScript
+
+
+// Example Express.js route
+app.get('/api/segments', async (req, res) => {
+  const { shopId } = req.query;
+  
+  try {
+    const segments = await prisma.segment.findMany({
+      where: {
+        shopId: String(shopId),
+        isActive: true,
+      },
+      include: {
+        _count: {
+          select: { customerSegments: true },
+        },
+      },
+    });
+    
+    res.json(segments.map(segment => ({
+      id: segment.id,
+      name: segment.name,
+      description: segment.description,
+      customerCount: segment._count.customerSegments,
+      createdAt: segment.createdAt,
+    })));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/segments/:segmentId/customers', async (req, res) => {
+  const { segmentId } = req.params;
+  const { limit = 100, offset = 0 } = req.query;
+  
+  try {
+    const customers = await prisma.customer.findMany({
+      where: {
+        customerSegments: {
+          some: {
+            segmentId: String(segmentId),
+          },
+        },
+      },
+      include: {
+        behavioralProfile: true,
+      },
+      take: Number(limit),
+      skip: Number(offset),
+    });
+    
+    res.json(customers);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+Advanced Features
+
+1. Predictive Segmentation
+
+Extend your segmentation to predict future behavior:
+
+TypeScript
+
+
+async function predictCustomerBehavior(customerId: string) {
+  // Get customer history
+  const customer = await prisma.customer.findUnique({
+    where: { id: customerId },
+    include: {
+      events: {
+        orderBy: { timestamp: 'asc' },
+      },
+    },
+  });
+  
+  // Extract features for prediction
+  // This is where you'd implement your prediction model
+  // For example, predicting churn risk or next purchase date
+  
+  // Update customer profile with predictions
+  await prisma.behavioralProfile.update({
+    where: { customerId },
+    data: {
+      churnRisk: calculatedChurnRisk,
+      nextPurchasePrediction: predictedNextPurchaseDate,
+      lifetimeValuePrediction: predictedLTV,
+    },
+  });
+}
+
+
+2. Recommendation Engine
+
+Use segment data to power product recommendations:
+
+TypeScript
+
+
+async function getRecommendationsForCustomer(customerId: string, limit = 5) {
+  // Get customer's segments
+  const customerSegments = await prisma.customerSegment.findMany({
+    where: { customerId },
+    include: { segment: true },
+  });
+  
+  if (customerSegments.length === 0) {
+    // Fall back to popular products if no segments
+    return getPopularProducts(limit);
+  }
+  
+  // Get other customers in the same segments
+  const similarCustomerIds = await prisma.customerSegment.findMany({
+    where: {
+      segmentId: { in: customerSegments.map(cs => cs.segmentId) },
+      NOT: { customerId },
+    },
+    select: { customerId: true },
+  });
+  
+  // Get products purchased by similar customers
+  const similarCustomerPurchases = await prisma.productInteraction.findMany({
+    where: {
+      customerId: { in: similarCustomerIds.map(sc => sc.customerId) },
+      interactionType: 'purchased',
+    },
+    select: { productId: true },
+    distinct: ['productId'],
+  });
+  
+  // Get products the customer has already purchased
+  const customerPurchases = await prisma.productInteraction.findMany({
+    where: {
+      customerId,
+      interactionType: 'purchased',
+    },
+    select: { productId: true },
+  });
+  
+  const purchasedProductIds = customerPurchases.map(p => p.productId);
+  
+  // Filter out products the customer already has
+  const recommendedProductIds = similarCustomerPurchases
+    .map(p => p.productId)
+    .filter(id => !purchasedProductIds.includes(id))
+    .slice(0, limit);
+  
+  // Get full product details
+  return prisma.product.findMany({
+    where: {
+      id: { in: recommendedProductIds },
+    },
+  });
+}
+
+
+3. Marketing Automation Integration
+
+Connect your segmentation engine to marketing platforms:
+
+TypeScript
+
+
+async function syncSegmentsToKlaviyo(shopId: string) {
+  // Get all active segments
+  const segments = await prisma.segment.findMany({
+    where: {
+      shopId,
+      isActive: true,
+    },
+  });
+  
+  for (const segment of segments) {
+    // Get customers in this segment
+    const customerSegments = await prisma.customerSegment.findMany({
+      where: { segmentId: segment.id },
+      include: { customer: true },
+    });
+    
+    const customerEmails = customerSegments
+      .map(cs => cs.customer.email)
+      .filter(Boolean);
+    
+    // Sync to Klaviyo (example - you'd need to use their API)
+    await klaviyoClient.createOrUpdateList({
+      listName: `Segment: ${segment.name}`,
+      emails: customerEmails,
+    });
+  }
+}
+
+
+Performance Optimization
+
+1. Batch Processing
+
+Process events and update profiles in batches:
+
+TypeScript
+
+
+async function batchProcessEvents(batchSize = 1000) {
+  // Get unprocessed events
+  const events = await prisma.event.findMany({
+    where: {
+      processed: false,
+    },
+    take: batchSize,
+    orderBy: { timestamp: 'asc' },
+  });
+  
+  // Process events in parallel batches
+  const batches = chunk(events, 100);
+  await Promise.all(batches.map(async (batchEvents) => {
+    for (const event of batchEvents) {
+      await processEvent(event);
+      
+      // Mark as processed
+      await prisma.event.update({
+        where: { id: event.id },
+        data: { processed: true },
+      });
+    }
+  }));
+}
+
+function chunk(array, size) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
+
+2. Caching
+
+Cache frequently accessed segment data:
+
+TypeScript
+
+
+// Using a simple in-memory cache (use Redis in production)
+const segmentCache = new Map();
+
+async function getCachedSegmentMembers(segmentId: string) {
+  const cacheKey = `segment:${segmentId}:members`;
+  
+  if (segmentCache.has(cacheKey)) {
+    return segmentCache.get(cacheKey);
+  }
+  
+  const members = await prisma.customerSegment.findMany({
+    where: { segmentId },
+    include: { customer: true },
+  });
+  
+  segmentCache.set(cacheKey, members);
+  setTimeout(() => segmentCache.delete(cacheKey), 5 * 60 * 1000); // 5 minute TTL
+  
+  return members;
+}
+
+
+3. Scheduled Jobs
+
+Set up scheduled jobs for regular processing:
+
+TypeScript
+
+
+// Using node-cron for scheduling
+import cron from 'node-cron';
+
+// Process events every 5 minutes
+cron.schedule('*/5 * * * *', async () => {
+  await batchProcessEvents();
+});
+
+// Update customer profiles daily
+cron.schedule('0 3 * * *', async () => {
+  // Get all shops
+  const shops = await prisma.shop.findMany();
+  
+  for (const shop of shops) {
+    await updateCustomerProfiles(shop.id);
+  }
+});
+
+// Run segmentation weekly
+cron.schedule('0 4 * * 0', async () => {
+  const shops = await prisma.shop.findMany();
+  
+  for (const shop of shops) {
+    await runSegmentationAlgorithm(shop.id);
+  }
+});
+
+
+Conclusion
+
+This implementation guide provides a comprehensive approach to building a Behavioral Customer Segmentation Engine using your existing Prisma database of Shopify Web Pixel events. By following these steps, you can create a powerful system that:
+
+1.
+Processes raw event data into meaningful behavioral features
+
+2.
+Groups customers into segments based on similar behavior patterns
+
+3.
+Automatically labels segments with descriptive names
+
+4.
+Updates segments as customer behavior changes
+
+5.
+Provides actionable insights for marketing and merchandising
+
+Remember to monitor system performance as your data grows and adjust your implementation accordingly. Start with simpler segmentation approaches and gradually add more sophisticated features as you validate the value of the initial implementation.
+
+
+
+
