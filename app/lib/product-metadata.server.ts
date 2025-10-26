@@ -36,7 +36,7 @@ export async function getDistinctProductGidsFromEvents(shopId: string, since?: D
     let extractedGid: string | undefined | null;
     let productIdFromVariant: string | undefined | null;
 
-    // Path from your example: event.eventData.data.productVariant.product.id
+    // event.eventData.data.productVariant.product.id
     if (data.data?.productVariant?.product?.id && typeof data.data.productVariant.product.id === 'string') {
       const DRAFT_ORDER_PREFIX = "gid://shopify/DraftOrder/";
       const PRODUCT_PREFIX = "gid://shopify/Product/";
@@ -50,7 +50,7 @@ export async function getDistinctProductGidsFromEvents(shopId: string, since?: D
         console.log(`[ProductMetadata] Skipped product_viewed GID: ${data.data.productVariant.product.id}`);
       }
     } else if (data.product?.id && typeof data.product.id === 'string' && data.product.id.startsWith('gid://shopify/Product/')) {
-      // Common for product_viewed, etc. directly having product.id (Original Check)
+      
       extractedGid = data.product.id;
       console.log(`[ProductMetadata] Extracted GID from data.product.id: ${extractedGid}`);
     } else if (data.cartLine?.merchandise?.product?.id && typeof data.cartLine.merchandise.product.id === 'string' && data.cartLine.merchandise.product.id.startsWith('gid://shopify/Product/')) {
